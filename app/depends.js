@@ -1,6 +1,8 @@
 enyo.depends(
 	"stylesheets/app.css",
 	"source/Util.js",
+	"source/Inflate.js",
+	"source/Wmf.js",
 	"source/Docx.js",
 	"source/Doc.js",
 	"source/Browser.js",

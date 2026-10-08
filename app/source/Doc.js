@@ -25,7 +25,9 @@
  * absolutely. The view that shows the page scrolls in software (see DocView.js), so
  * none of this becomes a layer on the graphics chip.
  *
- * Not handled: Windows metafile pictures (.wmf, .emf; a box marks their place), slanted
+ * Windows metafile pictures (.wmf) are drawn by Wmf.js.
+ *
+ * Not handled: enhanced metafile pictures (.emf; a box marks their place), slanted
  * lines (they would need a rotation, untried on the TouchPad), tab stops, columns,
  * Word 6/95 files, password-protected files.
  */
@@ -967,8 +969,9 @@ PP.Doc = {
 		return parts.join("");
 	},
 
-	// A stored picture record at this position, as an address an <img> can show; null if
-	// it is a kind the web engine cannot draw (Windows metafiles).
+	// A stored picture record at this position: an address an <img> can show, or for a
+	// Windows metafile {wmf: bytes, bounds: [left, top, right, bottom]} to be drawn by
+	// PP.Wmf, or null if it is a kind that cannot be drawn (enhanced metafiles, so far).
 	pictureAt: function(s, at) {
 		if (at + 8 > s.length) {
 			return null;
@@ -981,6 +984,18 @@ PP.Doc = {
 			// A wrapper: 36 bytes and a name, then the picture itself.
 			var inner = body + 36 + this.u8(s, body + 33);
 			return inner + 8 <= body + length ? this.pictureAt(s, inner) : null;
+		}
+		if (kind === 0xF01B) {
+			// A Windows metafile: one or two identifiers, a 34-byte header (unpacked size,
+			// the area covered, the size, packed size, whether it is packed), then the data.
+			var meta = body + (instance === 0x217 ? 32 : 16);
+			var packedSize = this.u32(s, meta + 28);
+			var metafile = this.u8(s, meta + 32) === 0 ? PP.inflate(s, meta + 34, packedSize, true) :
+				this.byteArray(s, meta + 34, packedSize);
+			if (!metafile) {
+				return null;
+			}
+			return {wmf: metafile, bounds: [this.s32(s, meta + 4), this.s32(s, meta + 8), this.s32(s, meta + 12), this.s32(s, meta + 16)]};
 		}
 		var type = null;
 		var skip = 17;  // an identifier and a marker byte come first
@@ -1008,6 +1023,16 @@ PP.Doc = {
 		return "data:" + type + ";base64," + btoa(this.bytes(s, body + skip, length - skip));
 	},
 
+	// Part of a stream as an array of byte values.
+	byteArray: function(s, at, length) {
+		var out = [];
+		var end = Math.min(s.length, at + length);
+		for (var i = at; i < end; i++) {
+			out.push(s.charCodeAt(i) & 0xFF);
+		}
+		return out;
+	},
+
 	le32: function(n) {
 		return String.fromCharCode(n & 0xFF, (n >> 8) & 0xFF, (n >> 16) & 0xFF, (n >>> 24) & 0xFF);
 	},
@@ -1027,6 +1052,11 @@ PP.Doc = {
 		var end = Math.min(data.length, at + total);
 		if (kind === 0x66) {
 			p += 1 + this.u8(data, p);  // a linked file's name
+		}
+		if (kind === 8) {
+			// The oldest way: the metafile itself follows the header.
+			out.src = {wmf: this.byteArray(data, p, end - p), bounds: null};
+			return out;
 		}
 		// The picture is a drawing record; go down through its containers to the stored picture.
 		while (p + 8 <= end) {
@@ -1351,13 +1381,20 @@ PP.Doc = {
 		}
 
 		function pictureNode(src, width, height) {
-			var node;
-			if (src) {
+			var node = null;
+			if (src && src.wmf) {
+				// A metafile is drawn onto a canvas, at the size it is shown (96 pixels to 72 points).
+				node = PP.Wmf.draw(src.wmf, src.bounds, (width || 72) * 96 / 72, (height || 72) * 96 / 72);
+				if (node) {
+					node.className = "pp-picture";
+				}
+			} else if (src) {
 				node = document.createElement("img");
 				node.className = "pp-picture";
 				node.src = src;
-			} else {
-				// A kind of picture the web engine cannot draw (a Windows metafile).
+			}
+			if (!node) {
+				// A kind of picture that cannot be drawn yet (an enhanced metafile).
 				node = document.createElement("span");
 				node.className = "pp-missing";
 				node.appendChild(document.createTextNode("[picture]"));

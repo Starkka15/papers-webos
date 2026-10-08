@@ -40,8 +40,9 @@ the job.
     bring those over and draw them.
   - [ ] Slanted lines (they need a rotation, untried on the TouchPad).
   - [ ] Gradient fills and shadows on shapes (drawn as a flat color).
-  - [ ] Windows metafile pictures (.wmf, .emf): a box marks their place. Needs a
-    metafile renderer.
+  - [x] Windows metafile pictures (.wmf), drawn on a canvas by `Wmf.js`.
+  - [ ] Enhanced metafile pictures (.emf): a box marks their place. LibreOffice's
+    reader is `emfio/source/reader/emfreader.cxx`.
   - [ ] Tab stops, and text in columns.
   - [ ] Each section's own page size, header and footer (the first section's are used).
   - [ ] Word 95 and older, and Rich Text saved with a .doc name.
