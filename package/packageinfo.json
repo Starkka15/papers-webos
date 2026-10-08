@@ -1,0 +1,9 @@
+{
+	"app": "com.stark.papers",
+	"id": "com.stark.papers",
+	"loc_name": "Papers",
+	"package_format_version": 2,
+	"services": ["com.stark.papers.service"],
+	"vendor": "stark",
+	"version": "0.1.0"
+}

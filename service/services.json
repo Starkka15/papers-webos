@@ -1,0 +1,16 @@
+{
+	"id": "com.stark.papers.service",
+	"description": "Finds documents on the TouchPad and unpacks them for the Papers app",
+	"engine": "node",
+	"activityTimeout": 60,
+	"services": [
+		{
+			"name": "com.stark.papers.service",
+			"globalized": false,
+			"commands": [
+				{ "name": "find", "assistant": "findAssistant", "public": true },
+				{ "name": "unpack", "assistant": "unpackAssistant", "public": true }
+			]
+		}
+	]
+}

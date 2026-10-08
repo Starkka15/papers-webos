@@ -1,0 +1,11 @@
+{
+	"id": "com.stark.papers",
+	"version": "0.1.0",
+	"vendor": "stark",
+	"type": "web",
+	"main": "index.html",
+	"title": "Papers",
+	"icon": "images/icon.png",
+	"uiRevision": 2,
+	"keywords": ["Documents", "Office", "Word", "Excel", "PowerPoint"]
+}

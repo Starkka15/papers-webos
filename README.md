@@ -1,0 +1,50 @@
+# Papers
+
+An open-source document viewer for the HP TouchPad (webOS), written in Enyo 1,
+meant to take the place of the office app the TouchPad shipped with.
+
+It reads documents itself, in JavaScript, following the way LibreOffice imports
+each format. Today it shows Word documents (.docx) and plain text; spreadsheets,
+presentations and the older formats are next. See [TODO.md](TODO.md).
+
+## Layout
+
+| Folder | What it is |
+|---|---|
+| `app/` | The Enyo 1 app. `source/Docx.js` is the Word document reader. |
+| `service/` | A node service that finds documents on the TouchPad and unpacks them (office files are zip archives) |
+| `service/bin/ppzip` | The built zip helper the service runs (the TouchPad's own unzip cannot read many current office files) |
+| `native/` | Source of `ppzip`: `ppzip.c` and the [miniz](https://github.com/richgel999/miniz) library (MIT) |
+| `package/` | Package description that ties the two together |
+| `tools/` | Build, install and test scripts for a TouchPad on USB |
+
+## Building
+
+With the webOS SDK's `palm-package` on the path:
+
+```
+palm-package app service package
+palm-install com.stark.papers_*_all.ipk
+```
+
+`tools/deploy.ps1` does this and relaunches the app on a connected TouchPad; set
+the two paths at its top for your machine.
+
+### The zip helper
+
+`service/bin/ppzip` is checked in, so the app can be packaged without a
+compiler. To rebuild it you need the webOS PDK and its ARM toolchain
+(CodeSourcery arm-2011.03) at `$PDK/arm-toolchain`:
+
+```
+make -C native            # PDK defaults to /opt/PalmPDK
+cp native/ppzip service/bin/ppzip
+```
+
+Build on a native Linux filesystem; the 2011 toolchain cannot read sources from
+a Windows or network drive.
+
+## License
+
+GPL-3.0. See [LICENSE](LICENSE). miniz is under the MIT license
+([native/LICENSE.miniz](native/LICENSE.miniz)).

@@ -1,0 +1,12 @@
+# Build output
+build/
+*.ipk
+
+# Editor files
+*.swp
+*~
+.vscode/
+.idea/
+
+# Native build output (the copy in service/bin is the one that ships)
+native/ppzip

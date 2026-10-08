@@ -1,0 +1,214 @@
+/* Papers. Dark bars top and bottom, a light list, and documents shown as sheets
+   of paper on a grey desk, after the look of the TouchPad's own office app. */
+
+.pp-app {
+	background: #fff;
+	color: #333;
+}
+
+/* ---- bars ---- */
+
+.pp-top, .pp-bottom {
+	height: 54px;
+	padding: 0 8px;
+	background: #343434;
+	background: -webkit-gradient(linear, left top, left bottom, from(#4d4d4d), to(#2b2b2b));
+	border-bottom: 1px solid #111;
+	-webkit-box-sizing: border-box;
+	box-sizing: border-box;
+}
+
+.pp-bottom {
+	border-bottom: none;
+	border-top: 1px solid #111;
+}
+
+.pp-bar-title {
+	color: #fff;
+	font-size: 20px;
+	padding: 0 8px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.pp-doc-title {
+	text-align: center;
+	padding-right: 110px;
+}
+
+/* ---- places (left) ---- */
+
+.pp-places {
+	width: 285px;
+	background: #f2f2f2;
+	border-right: 1px solid #1c1c1c;
+}
+
+.pp-place {
+	padding: 14px 14px;
+	font-size: 18px;
+}
+
+.pp-place-selected {
+	background: #cfe2f3;
+}
+
+.pp-place-icon {
+	width: 44px;
+	height: 30px;
+	margin-right: 14px;
+	border: 3px solid #222;
+	border-radius: 4px;
+	background: #2a4d8f;
+}
+
+/* ---- documents (right) ---- */
+
+.pp-search {
+	border-bottom: 1px solid #ccc;
+}
+
+.pp-note {
+	padding: 22px;
+	text-align: center;
+	color: #777;
+}
+
+.pp-row {
+	padding: 9px 14px;
+}
+
+.pp-row-text {
+	padding: 0 14px;
+	overflow: hidden;
+}
+
+.pp-name {
+	font-size: 18px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.pp-ext {
+	font-size: 18px;
+	color: #999;
+}
+
+.pp-date {
+	font-size: 13px;
+	color: #999;
+}
+
+.pp-size {
+	font-size: 13px;
+	color: #999;
+}
+
+/* A page with a letter on a colored band, one color per kind of file. */
+.pp-icon {
+	width: 30px;
+	height: 36px;
+	line-height: 36px;
+	text-align: center;
+	font-size: 17px;
+	font-weight: bold;
+	color: #fff;
+	border-radius: 3px;
+	background: #8a8a8a;
+}
+
+.pp-icon-text { background: #2b62b3; }
+.pp-icon-sheet { background: #2f8f4e; }
+.pp-icon-slides { background: #d2622a; }
+
+/* ---- an open document ---- */
+
+.pp-desk {
+	background: #8d9199;
+}
+
+.pp-doc-note {
+	margin: 60px 20px 16px;
+	text-align: center;
+	color: #fff;
+	font-size: 18px;
+}
+
+.pp-other {
+	width: 260px;
+	margin: 0 auto;
+}
+
+.pp-page {
+	padding: 16px 0 30px;
+}
+
+.pp-sheet {
+	margin: 0 auto;
+	padding: 72pt;
+	background: #fff;
+	color: #000;
+	font-size: 11pt;
+	line-height: 1.15;
+	-webkit-box-sizing: border-box;
+	box-sizing: border-box;
+	-webkit-box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+	word-wrap: break-word;
+	overflow: hidden;
+}
+
+.pp-plain {
+	width: 612pt;
+	white-space: pre-wrap;
+	font-family: monospace;
+	font-size: 10pt;
+}
+
+.pp-p {
+	margin: 0;
+	min-height: 1em;
+}
+
+.pp-label {
+	display: inline-block;
+}
+
+.pp-link {
+	color: #0563c1;
+	text-decoration: underline;
+}
+
+.pp-picture {
+	max-width: 100%;
+	vertical-align: bottom;
+}
+
+.pp-missing {
+	display: inline-block;
+	border: 1px dashed #999;
+	color: #999;
+	font-size: 9pt;
+	text-align: center;
+}
+
+/* Where the document starts a new page: a strip of the desk across the sheet. */
+.pp-page-gap, .pp-page-break:before {
+	display: block;
+	content: "";
+	height: 12px;
+	margin: 30pt -200pt;
+	background: #8d9199;
+}
+
+.pp-table {
+	border-collapse: collapse;
+	margin: 0;
+}
+
+.pp-table td {
+	vertical-align: top;
+	padding: 0 5.4pt;
+}
