@@ -21,21 +21,16 @@
  * Drawn shapes are boxes, rounded boxes, ovals and straight lines, alone or in groups,
  * with their fill and outline; any other shape is drawn as its bounding box.
  *
- * Layers: nothing here is placed over other content with a z-index, and nothing is
- * rotated. A document drawn with objects laid over its text (absolute position with a
- * z-index, inside the scroller) hung the TouchPad's graphics driver and the tablet had
- * to be reset. So an object the text should ignore sits in the flow of the text like
- * any other, and slanted lines are not drawn.
+ * Objects placed over or under the text, and the members of a group, are positioned
+ * absolutely. The view that shows the page scrolls in software (see DocView.js), so
+ * none of this becomes a layer on the graphics chip.
  *
  * Not handled: Windows metafile pictures (.wmf, .emf; a box marks their place), slanted
- * lines, objects overlapping text, tab stops, columns, Word 6/95 files,
- * password-protected files.
+ * lines (they would need a rotation, untried on the TouchPad), tab stops, columns,
+ * Word 6/95 files, password-protected files.
  */
 PP.Doc = {
-	// Groups of shapes place their members with absolute positions inside the group's box.
-	// That is untried on the TouchPad since the graphics hang (see "Layers" above), so it
-	// stays off until it has been tried with someone at the tablet.
-	drawGroups: false,
+	drawGroups: true,
 
 	// ---- bytes ---------------------------------------------------------------------
 
@@ -1391,7 +1386,7 @@ PP.Doc = {
 					return node;
 				}
 				// Level and upright lines are an edge of the box. A slanted line would need the
-				// box turned, which is left alone here: see the note on layers at the top.
+				// box turned, which has not been tried on the TouchPad.
 				if (height < 1.5) {
 					s.borderTop = stroke + "px solid " + ink;
 				} else if (width < 1.5) {
@@ -1438,9 +1433,8 @@ PP.Doc = {
 					// Its text ends with a paragraph mark of its own, which is not part of it.
 					self.flow(model, start + boxes[shape.text - 1], start + boxes[shape.text] - 1, inside, {});
 					node.appendChild(inside);
-					// Text decides the height: a box drawn for one size of type may need more here.
-					s.height = "auto";
-					s.minHeight = Math.max(0, height) + "pt";
+					// The box keeps the size it was drawn at, as in Word: text that does not fit is cut off.
+					s.overflow = "hidden";
 				}
 			}
 			return node;
@@ -1457,9 +1451,22 @@ PP.Doc = {
 			// Across the page, measured from the left margin (where the text starts).
 			var x = anchor.left - (anchor.fromPage ? section.marginLeft : 0);
 			var column = section.pageWidth - section.marginLeft - section.marginRight;
-			if (anchor.wrap === 1 || anchor.wrap === 3) {
-				// Text stops above it and goes on below. An object the text should ignore (one
-				// laid over or under it) is shown the same way: see the note on layers at the top.
+			if (anchor.wrap === 3) {
+				// Text ignores it: it lies over or under the text and takes up no room. It hangs
+				// from a spot of no size at the start of its paragraph.
+				var holder = document.createElement("span");
+				holder.className = "pp-anchor";
+				s.position = "absolute";
+				s.left = Math.max(-section.marginLeft, x) + "pt";
+				s.top = (anchor.fromParagraph ? anchor.top : 0) + "pt";
+				s.zIndex = anchor.behind ? "-1" : "1";
+				holder.appendChild(node);
+				items.unshift({node: holder});
+				current = null;
+				return;
+			}
+			if (anchor.wrap === 1) {
+				// Text stops above it and goes on below.
 				s.display = "block";
 				// It may reach into the left margin, as far as the edge of the page.
 				s.marginLeft = Math.max(-section.marginLeft, x) + "pt";

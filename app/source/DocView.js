@@ -11,7 +11,13 @@ enyo.kind({
 			{kind: "Button", caption: "Documents", className: "enyo-button-dark", onclick: "backClick"},
 			{name: "title", className: "pp-bar-title pp-doc-title", flex: 1}
 		]},
-		{name: "scroller", kind: "Scroller", flex: 1, className: "pp-desk", components: [
+		// accelerated: false. Enyo's scroller normally moves its content with a 3D transform,
+		// which makes everything inside it one layer on the graphics chip, as large as the
+		// content: a 31-page document would be a texture of some 130 MB. The TouchPad's own
+		// office app turned this off for its document and sheet scrollers for the same
+		// reason. Moved by its "top" instead, the page is drawn in software and only the
+		// part on screen costs anything.
+		{name: "scroller", kind: "Scroller", flex: 1, className: "pp-desk", accelerated: false, components: [
 			{name: "note", className: "pp-doc-note", showing: false},
 			{name: "other", kind: "Button", caption: "Open in Another App", className: "pp-other", showing: false,
 				onclick: "openElsewhere"},
