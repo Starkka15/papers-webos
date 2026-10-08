@@ -212,3 +212,13 @@
 	vertical-align: top;
 	padding: 0 5.4pt;
 }
+
+/* Tables from old Word files, whose own borders are not read yet. */
+.pp-table-plain td {
+	border: 1px solid #bbb;
+}
+
+/* Word keeps runs of spaces; so must the page. */
+.pp-p {
+	white-space: pre-wrap;
+}

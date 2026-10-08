@@ -513,20 +513,7 @@ PP.Docx = {
 			}
 		}
 
-		var s = el.style;
-		if (props.align) { s.textAlign = props.align; }
-		if (props.left) { s.marginLeft = props.left + "pt"; }
-		if (props.right) { s.marginRight = props.right + "pt"; }
-		if (props.first) { s.textIndent = props.first + "pt"; }
-		s.marginTop = (props.before || 0) + "pt";
-		s.marginBottom = (props.after || 0) + "pt";
-		if (props.line !== undefined) { s.lineHeight = String(props.line); }
-		if (props.background) { s.backgroundColor = props.background; }
-		if (props.borderTop && props.borderTop !== "none") { s.borderTop = props.borderTop; }
-		if (props.borderBottom && props.borderBottom !== "none") { s.borderBottom = props.borderBottom; }
-		if (props.borderLeft && props.borderLeft !== "none") { s.borderLeft = props.borderLeft; s.paddingLeft = "4pt"; }
-		if (props.borderRight && props.borderRight !== "none") { s.borderRight = props.borderRight; s.paddingRight = "4pt"; }
-		if (props.pageBreak) { el.className += " pp-page-break"; }
+		this.applyPara(el, props);
 
 		if (label !== null) {
 			var tag = document.createElement("span");
@@ -668,6 +655,24 @@ PP.Docx = {
 				span = null;
 			}
 		}
+	},
+
+	// Paragraph formatting as CSS on a block. Lengths are in points.
+	applyPara: function(el, props) {
+		var s = el.style;
+		if (props.align) { s.textAlign = props.align; }
+		if (props.left) { s.marginLeft = props.left + "pt"; }
+		if (props.right) { s.marginRight = props.right + "pt"; }
+		if (props.first) { s.textIndent = props.first + "pt"; }
+		s.marginTop = (props.before || 0) + "pt";
+		s.marginBottom = (props.after || 0) + "pt";
+		if (props.line !== undefined) { s.lineHeight = String(props.line); }
+		if (props.background) { s.backgroundColor = props.background; }
+		if (props.borderTop && props.borderTop !== "none") { s.borderTop = props.borderTop; }
+		if (props.borderBottom && props.borderBottom !== "none") { s.borderBottom = props.borderBottom; }
+		if (props.borderLeft && props.borderLeft !== "none") { s.borderLeft = props.borderLeft; s.paddingLeft = "4pt"; }
+		if (props.borderRight && props.borderRight !== "none") { s.borderRight = props.borderRight; s.paddingRight = "4pt"; }
+		if (props.pageBreak) { el.className += " pp-page-break"; }
 	},
 
 	// Run formatting as CSS on a span.

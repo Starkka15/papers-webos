@@ -27,6 +27,7 @@ enyo.kind({
 	openFile: function(file) {
 		this.file = file;
 		this.opens = (this.opens || 0) + 1;
+		var opening = this.opens;
 		var name = file.name;
 		try {
 			name = decodeURIComponent(name);
@@ -40,9 +41,15 @@ enyo.kind({
 		if (ext === "docx") {
 			this.showNote("Opening…");
 			this.$.unpackSvc.call({file: file.path});
+		} else if (ext === "doc") {
+			this.showNote("Opening…");
+			PP.Doc.open(file.path, enyo.bind(this, function(model, message) {
+				if (opening === this.opens) {
+					this.draw(PP.Doc, model, message);
+				}
+			}));
 		} else if (ext === "txt" || ext === "csv") {
 			this.showNote("Opening…");
-			var opening = this.opens;
 			PP.readText(file.path, enyo.bind(this, function(text) {
 				if (opening === this.opens) {
 					this.showText(text);
@@ -73,34 +80,9 @@ enyo.kind({
 	unpacked: function(inSender, inResponse) {
 		var opening = this.opens;
 		PP.Docx.open(inResponse.dir, enyo.bind(this, function(model, message) {
-			if (opening !== this.opens) {
-				return;  // another file has been opened since
+			if (opening === this.opens) {
+				this.draw(PP.Docx, model, message);
 			}
-			if (!model) {
-				this.showNote(message);
-				this.$.other.setShowing(true);
-				return;
-			}
-			var node = this.$.page.hasNode();
-			if (!node) {
-				return;
-			}
-			var blocks = 0;
-			try {
-				blocks = PP.Docx.render(model, node);
-			} catch (e) {
-				PP.log("could not draw " + this.file.name + ": " + e + (e.stack ? " " + e.stack : ""));
-				this.clearPage();
-				this.showNote("Something in this document could not be drawn.");
-				this.$.other.setShowing(true);
-				return;
-			}
-			this.showNote("");
-			if (this.file.scroll) {
-				this.$.scroller.setScrollTop(this.file.scroll);
-			}
-			PP.log("opened " + this.file.name + ": " + blocks + " blocks in " +
-				(new Date().getTime() - this.started) + " ms");
 		}));
 	},
 
@@ -108,6 +90,33 @@ enyo.kind({
 		PP.log("unpack: " + enyo.json.stringify(inResponse));
 		this.showNote((inResponse && inResponse.errorText) || "The file could not be opened.");
 		this.$.other.setShowing(true);
+	},
+
+	// Have a reader (PP.Docx, PP.Doc) draw what it read, or say why it could not.
+	draw: function(reader, model, message) {
+		var node = this.$.page.hasNode();
+		if (!model || !node) {
+			this.showNote(message || "The file could not be opened.");
+			this.$.other.setShowing(true);
+			return;
+		}
+		var blocks = 0;
+		try {
+			blocks = reader.render(model, node);
+		} catch (e) {
+			PP.log("could not draw " + this.file.name + ": " + e + (e.stack ? " " + e.stack : ""));
+			this.clearPage();
+			this.showNote("Something in this document could not be drawn.");
+			this.$.other.setShowing(true);
+			return;
+		}
+		this.showNote("");
+		// {scroll: pixels} from a test launch: start that far down the document.
+		if (this.file.scroll) {
+			this.$.scroller.setScrollTop(this.file.scroll);
+		}
+		PP.log("opened " + this.file.name + ": " + blocks + " blocks in " +
+			(new Date().getTime() - this.started) + " ms");
 	},
 
 	showText: function(text) {

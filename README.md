@@ -4,14 +4,14 @@ An open-source document viewer for the HP TouchPad (webOS), written in Enyo 1,
 meant to take the place of the office app the TouchPad shipped with.
 
 It reads documents itself, in JavaScript, following the way LibreOffice imports
-each format. Today it shows Word documents (.docx) and plain text; spreadsheets,
-presentations and the older formats are next. See [TODO.md](TODO.md).
+each format. Today it shows Word documents (.docx and the older .doc) and plain text; spreadsheets,
+and presentations are next. See [TODO.md](TODO.md).
 
 ## Layout
 
 | Folder | What it is |
 |---|---|
-| `app/` | The Enyo 1 app. `source/Docx.js` is the Word document reader. |
+| `app/` | The Enyo 1 app. `source/Docx.js` and `source/Doc.js` are the Word document readers. |
 | `service/` | A node service that finds documents on the TouchPad and unpacks them (office files are zip archives) |
 | `service/bin/ppzip` | The built zip helper the service runs (the TouchPad's own unzip cannot read many current office files) |
 | `native/` | Source of `ppzip`: `ppzip.c` and the [miniz](https://github.com/richgel999/miniz) library (MIT) |

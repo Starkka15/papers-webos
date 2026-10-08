@@ -102,3 +102,35 @@ PP.readXml = function(path, callback) {
 		callback(doc);
 	});
 };
+
+// Read a local file as bytes: callback(string with one character per byte), or
+// callback(null). Use charCodeAt(i) & 0xFF to get a byte.
+PP.readBinary = function(path, callback) {
+	var req = new XMLHttpRequest();
+	var done = false;
+	function finish(data) {
+		if (!done) {
+			done = true;
+			callback(data);
+		}
+	}
+	try {
+		req.open("GET", PP.fileUrl(path), true);
+		// Keeps the web engine from decoding the bytes as text.
+		req.overrideMimeType("text/plain; charset=x-user-defined");
+	} catch (e) {
+		finish(null);
+		return;
+	}
+	req.onreadystatechange = function() {
+		if (req.readyState === 4) {
+			finish(req.responseText ? req.responseText : null);
+		}
+	};
+	req.onerror = function() { finish(null); };
+	try {
+		req.send(null);
+	} catch (e2) {
+		finish(null);
+	}
+};

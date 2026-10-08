@@ -14,7 +14,12 @@ the job.
   italic, underline, color, size, highlight, super- and subscript, alignment,
   indents and spacing, bulleted and numbered lists, tables with merged cells and
   borders, pictures, links, page breaks.
+- [x] **Old Word documents (.doc, Word 97 to 2003)**: text with fonts, bold, italic,
+  underline, color, size, super- and subscript, alignment, indents and spacing,
+  styles, bullets and numbering, tables (with plain thin lines).
 - [x] **Plain text** (.txt, .csv as text).
+- [x] **Reads any zip**: a small native helper (`native/ppzip.c`) unpacks office
+  files, because the TouchPad's own unzip cannot read many current ones.
 - [x] **Opens a file it is launched with** (`{target: "file:///..."}`).
 
 ## Most worth doing
@@ -22,8 +27,9 @@ the job.
 - [ ] **Spreadsheets (.xlsx)**: sheets as scrolling grids, with sheet tabs, number
   and date formats, column widths, merged cells and cell colors.
 - [ ] **Presentations (.pptx)**: slides drawn to scale, with a slide strip.
-- [ ] **Old Word files (.doc)**. Most documents on a TouchPad are these. The
-  format is binary; start with the text and basic formatting.
+- [ ] **Old Word files, the rest**: pictures and drawings, the table borders and
+  shading set in the file, headers and footers, footnotes, page size and
+  margins, Word 95 and older, and Rich Text saved with a .doc name.
 - [ ] **Take over from the old office app**: register for the document file
   types, so a tapped attachment or download opens here.
 - [ ] **Pinch to zoom and fit to width**, and remember the place in a document.
