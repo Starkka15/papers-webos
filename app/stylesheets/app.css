@@ -213,10 +213,48 @@
 	padding: 0 5.4pt;
 }
 
-/* Tables from old Word files, whose own borders are not read yet. */
-.pp-table-plain td {
-	border: 1px solid #bbb;
+/* A document's header and footer, shown once each, and its notes after the text. */
+.pp-header {
+	margin-bottom: 18pt;
 }
+
+.pp-footer {
+	margin-top: 18pt;
+}
+
+.pp-notes-rule {
+	width: 144pt;
+	margin: 18pt 0 6pt;
+	border-top: 1px solid #000;
+}
+
+.pp-note {
+	font-size: 10pt;
+}
+
+/* A drawn shape: a box that may be filled, outlined, round, or hold text or other
+   shapes. Its size comes from the document. */
+.pp-shape {
+	display: inline-block;
+	position: relative;
+	vertical-align: top;
+	text-indent: 0;
+	white-space: normal;
+	-webkit-box-sizing: border-box;
+	box-sizing: border-box;
+}
+
+/* The text inside a shape. */
+.pp-textbox {
+	display: block;
+	padding: 3.6pt 7.2pt;
+}
+
+.pp-textbox .pp-p {
+	white-space: pre-wrap;
+}
+
+
 
 /* Word keeps runs of spaces; so must the page. */
 .pp-p {

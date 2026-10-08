@@ -15,8 +15,12 @@ the job.
   indents and spacing, bulleted and numbered lists, tables with merged cells and
   borders, pictures, links, page breaks.
 - [x] **Old Word documents (.doc, Word 97 to 2003)**: text with fonts, bold, italic,
-  underline, color, size, super- and subscript, alignment, indents and spacing,
-  styles, bullets and numbering, tables (with plain thin lines).
+  underline, color, size, shading, super- and subscript, alignment, indents and
+  spacing, paragraph borders, styles, bullets and numbering, links; tables with
+  the file's borders, shading, widths and merged cells; pictures (PNG, JPEG,
+  bitmap) in the text and floating; text boxes and drawn boxes, ovals and level
+  or upright lines with their fill and outline; the header and footer; footnotes
+  and endnotes; page size and margins.
 - [x] **Plain text** (.txt, .csv as text).
 - [x] **Reads any zip**: a small native helper (`native/ppzip.c`) unpacks office
   files, because the TouchPad's own unzip cannot read many current ones.
@@ -27,15 +31,25 @@ the job.
 - [ ] **Spreadsheets (.xlsx)**: sheets as scrolling grids, with sheet tabs, number
   and date formats, column widths, merged cells and cell colors.
 - [ ] **Presentations (.pptx)**: slides drawn to scale, with a slide strip.
-- [ ] **Old Word files, the rest**: pictures and drawings, the table borders and
-  shading set in the file, headers and footers, footnotes, page size and
-  margins, Word 95 and older, and Rich Text saved with a .doc name.
+- [ ] **Finish old Word files (.doc)** before starting another format:
+  - [ ] Footnotes and endnotes are written but untested: find or make a file with some.
+  - [ ] Groups of shapes (diagrams). Written, switched off (`PP.Doc.drawGroups`): they
+    need absolute positions, untried since the graphics hang below.
+  - [ ] Objects that overlap text, and slanted lines. Both were taken out after the
+    TouchPad's graphics driver hung on a page with layered boxes; they need a way
+    to draw that does not stack layers (see the note at the top of `Doc.js`).
+  - [ ] Windows metafile pictures (.wmf, .emf): a box marks their place. Needs a
+    metafile renderer.
+  - [ ] Tab stops, and text in columns.
+  - [ ] Each section's own page size, header and footer (the first section's are used).
+  - [ ] Word 95 and older, and Rich Text saved with a .doc name.
+- [ ] **Finish Word documents (.docx)** to the same level: headers and footers,
+  footnotes, text boxes and floating pictures, drawn shapes, tab stops, table
+  shading from table styles, tracked changes.
 - [ ] **Take over from the old office app**: register for the document file
   types, so a tapped attachment or download opens here.
 - [ ] **Pinch to zoom and fit to width**, and remember the place in a document.
-- [ ] **Word documents, the rest**: headers and footers, footnotes, text boxes and
-  floating pictures, columns, tab stops, table cell margins and shading from
-  table styles, tracked changes, real pages.
+- [ ] **Real pages**: break a document into pages as the original does.
 - [ ] **A real icon.**
 
 ## Smaller wins

@@ -10,13 +10,33 @@
  *   styles       <- WW8Style         the style sheet, with "based on" inheritance
  *   lists        <- WW8ListManager   list definitions, for bullets and numbers
  *
- * Formatting ends up in the same shape Docx.js uses, so both draw with the same code.
+ *   drawing      <- the "Office Art" records (filter/source/msfilter): stored pictures,
+ *                   and which picture or text box each drawn shape shows
  *
- * Not handled yet: pictures and drawings, headers and footers, footnotes, table
- * borders and shading as set in the file (tables get plain thin lines), sections
- * and page sizes, Word 6/95 files, password-protected files.
+ * Formatting ends up in the same shape Docx.js uses, so both draw with the same code.
+ * The page is one continuous sheet: the first section gives its size and margins, its
+ * header is shown once at the top and its footer once at the bottom, and footnotes and
+ * endnotes are listed after the text.
+ *
+ * Drawn shapes are boxes, rounded boxes, ovals and straight lines, alone or in groups,
+ * with their fill and outline; any other shape is drawn as its bounding box.
+ *
+ * Layers: nothing here is placed over other content with a z-index, and nothing is
+ * rotated. A document drawn with objects laid over its text (absolute position with a
+ * z-index, inside the scroller) hung the TouchPad's graphics driver and the tablet had
+ * to be reset. So an object the text should ignore sits in the flow of the text like
+ * any other, and slanted lines are not drawn.
+ *
+ * Not handled: Windows metafile pictures (.wmf, .emf; a box marks their place), slanted
+ * lines, objects overlapping text, tab stops, columns, Word 6/95 files,
+ * password-protected files.
  */
 PP.Doc = {
+	// Groups of shapes place their members with absolute positions inside the group's box.
+	// That is untried on the TouchPad since the graphics hang (see "Layers" above), so it
+	// stays off until it has been tried with someone at the tablet.
+	drawGroups: false,
+
 	// ---- bytes ---------------------------------------------------------------------
 
 	u8: function(s, at) {
@@ -35,6 +55,11 @@ PP.Doc = {
 	u32: function(s, at) {
 		return ((s.charCodeAt(at) & 0xFF) | ((s.charCodeAt(at + 1) & 0xFF) << 8) |
 			((s.charCodeAt(at + 2) & 0xFF) << 16)) + (s.charCodeAt(at + 3) & 0xFF) * 16777216;
+	},
+
+	s32: function(s, at) {
+		var v = this.u32(s, at);
+		return v >= 0x80000000 ? v - 0x100000000 : v;
 	},
 
 	// Windows-1252 differs from Unicode only in 0x80 to 0x9F.
@@ -209,12 +234,21 @@ PP.Doc = {
 		if (!table) {
 			return {error: "This document is damaged."};
 		}
-		var model = {wd: wd, table: table, textLength: this.u32(wd, 0x4C)};
 		var self = this;
 		// The file's index: pairs of (where, how long) in the table stream, 8 bytes each from 0x9A.
 		function where(index) {
 			return {at: self.u32(wd, 0x9A + index * 8), length: self.u32(wd, 0x9E + index * 8)};
 		}
+		// The text is one run of characters: the body, then footnotes, headers and
+		// footers, comments, endnotes and text boxes, each a given number of characters.
+		var n = {text: this.u32(wd, 0x4C), foot: this.u32(wd, 0x50), head: this.u32(wd, 0x54),
+			macro: this.u32(wd, 0x58), comment: this.u32(wd, 0x5C), end: this.u32(wd, 0x60), box: this.u32(wd, 0x64)};
+		var model = {wd: wd, table: table, data: stream("Data") || "", textLength: n.text,
+			footStart: n.text,
+			headStart: n.text + n.foot,
+			endStart: n.text + n.foot + n.head + n.macro + n.comment,
+			boxStart: n.text + n.foot + n.head + n.macro + n.comment + n.end,
+			headBoxStart: n.text + n.foot + n.head + n.macro + n.comment + n.end + n.box};
 		model.styles = this.readStyles(table, where(1));
 		model.chpRuns = this.readPages(wd, table, where(12), false);
 		model.papRuns = this.readPages(wd, table, where(13), true);
@@ -224,7 +258,32 @@ PP.Doc = {
 		if (!model.pieces.length) {
 			return {error: "This document has no text that Papers could find."};
 		}
+		model.sections = this.readSections(model, where(6));
+		model.footRefs = this.positions(table, where(2), 2);
+		model.footText = this.positions(table, where(3), 0);
+		model.endRefs = this.positions(table, where(46), 2);
+		model.endText = this.positions(table, where(47), 0);
+		model.headers = this.positions(table, where(11), 0);
+		model.boxes = this.positions(table, where(56), 22);
+		model.headBoxes = this.positions(table, where(58), 22);
+		model.anchors = {};
+		this.readAnchors(model, where(40), 0);
+		this.readAnchors(model, where(41), model.headStart);
+		model.art = this.readArt(table, where(50));
 		return model;
+	},
+
+	// A table of positions: (count + 1) character positions, then count entries of the given size.
+	positions: function(table, plc, entrySize) {
+		var out = [];
+		if (plc.length < 4) {
+			return out;
+		}
+		var count = Math.floor((plc.length - 4) / (4 + entrySize));
+		for (var i = 0; i <= count; i++) {
+			out.push(this.u32(table, plc.at + i * 4));
+		}
+		return out;
 	},
 
 	// ---- where the text is (the piece table) ------------------------------------------------
@@ -365,9 +424,75 @@ PP.Doc = {
 		return value !== 0;
 	},
 
-	// Apply a list of codes from stream s to paragraph properties pap and character properties chp.
+	rgb: function(s, at) {
+		function hex(n) {
+			return (n < 16 ? "0" : "") + n.toString(16);
+		}
+		return "#" + hex(this.u8(s, at)) + hex(this.u8(s, at + 1)) + hex(this.u8(s, at + 2));
+	},
+
+	// A line as CSS from its width (eighths of a point), kind and color.
+	line: function(width, kind, color) {
+		if (kind === 0 || kind === 0xFF) {
+			return "none";
+		}
+		// The web engine draws nothing thinner than a pixel.
+		var px = Math.max(1, Math.round(width / 8 * 96 / 72));
+		var style = kind === 3 ? "double" : (kind === 6 ? "dotted" : (kind === 7 || kind === 22 ? "dashed" : "solid"));
+		if (style === "double") {
+			px = Math.max(px, 3);
+		}
+		return px + "px " + style + " " + (color || "#000");
+	},
+
+	// A border in the 4-byte form (Word 97): width, kind, color number, spacing.
+	border4: function(s, at) {
+		if (this.u32(s, at) === 0xFFFFFFFF) {
+			return "none";
+		}
+		return this.line(this.u8(s, at), this.u8(s, at + 1), this.colors[this.u8(s, at + 2)]);
+	},
+
+	// A border in the 8-byte form (Word 2000 on): color, width, kind, spacing.
+	border8: function(s, at) {
+		if (this.u32(s, at) === 0xFFFFFFFF && this.u32(s, at + 4) === 0xFFFFFFFF) {
+			return "none";
+		}
+		return this.line(this.u8(s, at + 4), this.u8(s, at + 5), this.u8(s, at + 3) === 0xFF ? undefined : this.rgb(s, at));
+	},
+
+	// Shading in the 2-byte form: color numbers and a pattern.
+	shade2: function(s, at) {
+		var v = this.u16(s, at);
+		var pattern = v >> 10;
+		if (pattern === 0) {
+			return this.colors[(v >> 5) & 0x1F];
+		}
+		if (pattern === 1) {
+			return this.colors[v & 0x1F] || "#000000";
+		}
+		// A dotted or striped pattern: a grey of about the same weight.
+		return pattern <= 4 ? "#e6e6e6" : (pattern <= 8 ? "#bfbfbf" : "#8c8c8c");
+	},
+
+	// Shading in the 10-byte form: foreground color, background color, pattern.
+	shade10: function(s, at) {
+		var pattern = this.u16(s, at + 8);
+		if (pattern === 0) {
+			return this.u8(s, at + 7) === 0xFF ? undefined : this.rgb(s, at + 4);
+		}
+		if (pattern === 1) {
+			return this.u8(s, at + 3) === 0xFF ? "#000000" : this.rgb(s, at);
+		}
+		return this.u8(s, at + 7) === 0xFF ? "#d9d9d9" : this.rgb(s, at + 4);
+	},
+
+	// Apply a list of codes from stream s to paragraph properties pap and character
+	// properties chp. Section and table row settings also land in pap.
 	apply: function(model, s, at, length, pap, chp) {
 		var end = at + length;
+		var i;
+		var count;
 		while (at + 2 <= end) {
 			var code = this.u16(s, at);
 			var v = at + 2;
@@ -384,6 +509,8 @@ PP.Doc = {
 			case 0x083B: chp.caps = this.flag(this.u8(s, v), chp.caps); break;
 			case 0x083C: chp.hidden = this.flag(this.u8(s, v), chp.hidden); break;
 			case 0x0855: chp.special = this.u8(s, v) !== 0; break;
+			case 0x0806: chp.formData = this.u8(s, v) !== 0; break;
+			case 0x6A03: chp.picture = this.u32(s, v); break;
 			case 0x2A3E: chp.underline = this.u8(s, v) !== 0; break;
 			case 0x4A43: chp.size = this.u16(s, v) / 2; break;
 			case 0x2A42: chp.color = this.colors[this.u8(s, v)]; break;
@@ -391,6 +518,8 @@ PP.Doc = {
 				chp.color = this.u8(s, v + 3) === 0xFF ? undefined : this.rgb(s, v);
 				break;
 			case 0x2A0C: chp.background = this.colors[this.u8(s, v)]; break;
+			case 0x4866: chp.background = this.shade2(s, v); break;
+			case 0xCA71: chp.background = this.shade10(s, v + 1); break;
 			case 0x2A48:
 				chp.vertical = this.u8(s, v) === 1 ? "superscript" : (this.u8(s, v) === 2 ? "subscript" : undefined);
 				break;
@@ -423,24 +552,99 @@ PP.Doc = {
 			case 0x2417: pap.rowEnd = this.u8(s, v) !== 0; break;
 			case 0x260A: pap.level = this.u8(s, v); break;
 			case 0x460B: pap.list = this.u16(s, v); break;
+			case 0x6424: pap.borderTop = this.border4(s, v); break;
+			case 0x6425: pap.borderLeft = this.border4(s, v); break;
+			case 0x6426: pap.borderBottom = this.border4(s, v); break;
+			case 0x6427: pap.borderRight = this.border4(s, v); break;
+			case 0xC64E: pap.borderTop = this.border8(s, v + 1); break;
+			case 0xC64F: pap.borderLeft = this.border8(s, v + 1); break;
+			case 0xC650: pap.borderBottom = this.border8(s, v + 1); break;
+			case 0xC651: pap.borderRight = this.border8(s, v + 1); break;
+			case 0x442D: pap.background = this.shade2(s, v); break;
+			case 0xC64D: pap.background = this.shade10(s, v + 1); break;
+			// table rows (these come with the mark that ends a row)
 			case 0xD608:
-				// Where each cell of the row starts and ends, in twips.
-				var cells = this.u8(s, v + 2);
+				// Where each cell starts and ends (twips), then each cell's flags and borders.
+				count = this.u8(s, v + 2);
 				pap.edges = [];
-				for (var c = 0; c <= cells; c++) {
-					pap.edges.push(this.s16(s, v + 3 + c * 2));
+				for (i = 0; i <= count; i++) {
+					pap.edges.push(this.s16(s, v + 3 + i * 2));
+				}
+				pap.cells = [];
+				var tc = v + 3 + (count + 1) * 2;
+				for (i = 0; i < count && tc + 20 <= v + size; i++, tc += 20) {
+					var bits = this.u16(s, tc);
+					pap.cells.push({
+						first: (bits & 0x01) !== 0, merged: (bits & 0x02) !== 0,
+						down: (bits & 0x20) !== 0, downStart: (bits & 0x40) !== 0,
+						valign: (bits >> 7) & 3,
+						top: this.border4(s, tc + 4), left: this.border4(s, tc + 8),
+						bottom: this.border4(s, tc + 12), right: this.border4(s, tc + 16),
+						// A border of all zeros says "nothing set here; use the table's".
+						set: [this.u32(s, tc + 4) !== 0, this.u32(s, tc + 8) !== 0,
+							this.u32(s, tc + 12) !== 0, this.u32(s, tc + 16) !== 0]
+					});
 				}
 				break;
+			case 0xD605:
+				pap.tableBorders = [];
+				for (i = 0; i < 6; i++) {
+					pap.tableBorders.push(this.border4(s, v + 1 + i * 4));
+				}
+				break;
+			case 0xD613:
+				pap.tableBorders = [];
+				for (i = 0; i < 6; i++) {
+					pap.tableBorders.push(this.border8(s, v + 1 + i * 8));
+				}
+				break;
+			case 0xD609:
+				pap.shades = [];
+				for (i = 0; i < this.u8(s, v) / 2; i++) {
+					pap.shades.push(this.shade2(s, v + 1 + i * 2));
+				}
+				break;
+			case 0xD612: case 0xD616: case 0xD60C:
+				// The colors of cells 1-22, 23-44 and 45-63.
+				pap.shades = code === 0xD612 ? [] : (pap.shades || []);
+				for (i = 0; i < Math.floor(this.u8(s, v) / 10); i++) {
+					pap.shades.push(this.shade10(s, v + 1 + i * 10));
+				}
+				break;
+			case 0x5400: pap.tableAlign = this.u16(s, v); break;
+			// sections
+			case 0xB01F: pap.pageWidth = this.u16(s, v) / 20; break;
+			case 0xB020: pap.pageHeight = this.u16(s, v) / 20; break;
+			case 0xB021: pap.marginLeft = this.u16(s, v) / 20; break;
+			case 0xB022: pap.marginRight = this.u16(s, v) / 20; break;
+			case 0x9023: pap.marginTop = Math.abs(this.s16(s, v)) / 20; break;
+			case 0x9024: pap.marginBottom = Math.abs(this.s16(s, v)) / 20; break;
+			case 0x300A: pap.titlePage = this.u8(s, v) !== 0; break;
 			}
 			at = v + size;
 		}
 	},
 
-	rgb: function(s, at) {
-		function hex(n) {
-			return (n < 16 ? "0" : "") + n.toString(16);
+	// ---- sections: page size and margins ---------------------------------------------------------
+
+	readSections: function(model, plc) {
+		var out = [];
+		var count = plc.length >= 4 ? Math.floor((plc.length - 4) / 16) : 0;
+		for (var i = 0; i < count; i++) {
+			// What Word assumes when a section says nothing: US Letter, 1.25" and 1" margins.
+			var section = {end: this.u32(model.table, plc.at + (i + 1) * 4), pageWidth: 612, pageHeight: 792,
+				marginLeft: 90, marginRight: 90, marginTop: 72, marginBottom: 72};
+			var at = this.u32(model.table, plc.at + (count + 1) * 4 + i * 12 + 2);
+			if (at !== 0xFFFFFFFF && at + 2 <= model.wd.length) {
+				this.apply(model, model.wd, at + 2, this.u16(model.wd, at), section, {});
+			}
+			out.push(section);
 		}
-		return "#" + hex(this.u8(s, at)) + hex(this.u8(s, at + 1)) + hex(this.u8(s, at + 2));
+		if (!out.length) {
+			out.push({end: model.textLength, pageWidth: 612, pageHeight: 792, marginLeft: 90, marginRight: 90,
+				marginTop: 72, marginBottom: 72});
+		}
+		return out;
 	},
 
 	// ---- the style sheet ---------------------------------------------------------------------
@@ -617,36 +821,384 @@ PP.Doc = {
 		return label;
 	},
 
+	// ---- pictures and drawn objects ---------------------------------------------------------------
+
+	// Where drawn objects are anchored in the text: position -> {shape, left, top, width,
+	// height (points), wrap, behind, fromPage, fromParagraph}.
+	readAnchors: function(model, plc, offset) {
+		var count = plc.length >= 4 ? Math.floor((plc.length - 4) / 30) : 0;
+		for (var i = 0; i < count; i++) {
+			var at = plc.at + (count + 1) * 4 + i * 26;
+			var left = this.s32(model.table, at + 4);
+			var top = this.s32(model.table, at + 8);
+			var flags = this.u16(model.table, at + 20);
+			model.anchors[offset + this.u32(model.table, plc.at + i * 4)] = {
+				shape: this.u32(model.table, at),
+				left: left / 20,
+				top: top / 20,
+				width: (this.s32(model.table, at + 12) - left) / 20,
+				height: (this.s32(model.table, at + 16) - top) / 20,
+				// 0 and 2: text runs beside it; 1: text stops above and goes on below; 3: text ignores it
+				wrap: (flags >> 5) & 0xF,
+				behind: (flags & 0x4000) !== 0,
+				fromPage: ((flags >> 1) & 3) === 1,       // measured from the page edge, not the margin
+				fromParagraph: ((flags >> 3) & 3) === 2   // measured down from its paragraph
+			};
+		}
+	},
+
+	// A drawing color: red, green, blue in the low three bytes. The top byte marks colors
+	// taken from the system or a scheme, which are not looked up here.
+	artColor: function(value) {
+		if ((value >>> 24) & 0x19) {
+			return undefined;
+		}
+		function hex(n) {
+			return (n < 16 ? "0" : "") + n.toString(16);
+		}
+		return "#" + hex(value & 0xFF) + hex((value >> 8) & 0xFF) + hex((value >> 16) & 0xFF);
+	},
+
+	// The drawing layer: the list of stored pictures, and what each shape is.
+	// Returns {pictures: [position in the WordDocument stream], shapes: {id: shape}}, a shape being
+	//   {id, kind, flipH, flipV, picture, text, fill, filled, line, lined, lineWidth,
+	//    box: [left, top, right, bottom] within its group, space: the group's own coordinates,
+	//    members: [shapes of a group]}
+	readArt: function(table, where) {
+		var art = {pictures: [], shapes: {}};
+		var self = this;
+		// Records nest: 8 bytes of header (version and instance, kind, length), then the content.
+		function walk(p, end, group) {
+			var shape = null;
+			while (p + 8 <= end) {
+				var head = self.u16(table, p);
+				var kind = self.u16(table, p + 2);
+				var length = self.u32(table, p + 4);
+				var body = p + 8;
+				if (kind === 0xF007) {
+					// A stored picture: its bytes are elsewhere, at this position.
+					art.pictures.push(length >= 36 ? self.u32(table, body + 28) : 0xFFFFFFFF);
+				} else if (kind === 0xF003) {
+					// A group: its first shape stands for the group, the rest are its members.
+					var holder = {members: [], isGroup: true};
+					walk(body, Math.min(end, body + length), holder);
+					if (group && holder.shape) {
+						group.members.push(holder.shape);
+					}
+				} else if (kind === 0xF004) {
+					shape = walk(body, Math.min(end, body + length), null);
+					if (shape && group) {
+						if (!group.shape) {
+							group.shape = shape;
+							shape.members = group.members;
+						} else {
+							group.members.push(shape);
+						}
+					}
+				} else if (kind === 0xF009 && length >= 16) {
+					// The coordinates a group's members are placed in. It comes before the shape's own record.
+					shape = shape || {members: []};
+					shape.space = [self.s32(table, body), self.s32(table, body + 4), self.s32(table, body + 8), self.s32(table, body + 12)];
+				} else if (kind === 0xF00A) {
+					shape = shape || {members: []};
+					shape.id = self.u32(table, body);
+					shape.kind = head >> 4;
+					var bits = self.u32(table, body + 4);
+					shape.flipH = (bits & 0x40) !== 0;
+					shape.flipV = (bits & 0x80) !== 0;
+					shape.filled = true;
+					shape.lined = true;
+					art.shapes[shape.id] = shape;
+				} else if (kind === 0xF00B && shape) {
+					// Properties: 6 bytes each, a number and a value.
+					for (var i = 0; i < (head >> 4) && body + i * 6 + 6 <= end; i++) {
+						var id = self.u16(table, body + i * 6) & 0x3FFF;
+						var value = self.u32(table, body + i * 6 + 2);
+						switch (id) {
+						case 260: shape.picture = value; break;        // which stored picture, counting from 1
+						case 128: shape.text = value >>> 16; break;    // which text box, counting from 1
+						case 385: shape.fill = self.artColor(value); break;
+						case 448: shape.line = self.artColor(value); break;
+						case 459: shape.lineWidth = value / 12700; break;
+						case 447:
+							// Each on/off setting has a second bit saying whether it is given at all.
+							if (value & 0x100000) { shape.filled = (value & 0x10) !== 0; }
+							break;
+						case 511:
+							if (value & 0x80000) { shape.lined = (value & 0x08) !== 0; }
+							break;
+						}
+					}
+				} else if (kind === 0xF00F && shape && length >= 16) {
+					// Where a member sits in its group's coordinates.
+					shape.box = [self.s32(table, body), self.s32(table, body + 4), self.s32(table, body + 8), self.s32(table, body + 12)];
+				} else if ((head & 0xF) === 0xF) {
+					var inner = walk(body, Math.min(end, body + length), group);
+					shape = shape || inner;
+				}
+				p = body + length;
+			}
+			return shape;
+		}
+		if (where.length > 8) {
+			var p = where.at;
+			var end = where.at + where.length;
+			// The shared part, then one drawing per part of the document, each after a marker byte.
+			while (p + 8 <= end) {
+				var length = this.u32(table, p + 4);
+				walk(p, Math.min(end, p + 8 + length), null);
+				p += 8 + length + 1;
+			}
+		}
+		return art;
+	},
+
+	// The bytes of a stream as a string of characters 0 to 255, which btoa needs.
+	bytes: function(s, at, length) {
+		var parts = [];
+		var end = Math.min(s.length, at + length);
+		for (var p = at; p < end; p += 4096) {
+			var chunk = [];
+			var stop = Math.min(end, p + 4096);
+			for (var i = p; i < stop; i++) {
+				chunk.push(s.charCodeAt(i) & 0xFF);
+			}
+			parts.push(String.fromCharCode.apply(null, chunk));
+		}
+		return parts.join("");
+	},
+
+	// A stored picture record at this position, as an address an <img> can show; null if
+	// it is a kind the web engine cannot draw (Windows metafiles).
+	pictureAt: function(s, at) {
+		if (at + 8 > s.length) {
+			return null;
+		}
+		var instance = this.u16(s, at) >> 4;
+		var kind = this.u16(s, at + 2);
+		var length = this.u32(s, at + 4);
+		var body = at + 8;
+		if (kind === 0xF007) {
+			// A wrapper: 36 bytes and a name, then the picture itself.
+			var inner = body + 36 + this.u8(s, body + 33);
+			return inner + 8 <= body + length ? this.pictureAt(s, inner) : null;
+		}
+		var type = null;
+		var skip = 17;  // an identifier and a marker byte come first
+		if (kind === 0xF01E) {
+			type = "image/png";
+			skip = instance === 0x6E1 ? 33 : 17;
+		} else if (kind === 0xF01D || kind === 0xF02A) {
+			type = "image/jpeg";
+			skip = instance === 0x46B || instance === 0x6E3 ? 33 : 17;
+		} else if (kind === 0xF01F) {
+			skip = instance === 0x7A9 ? 33 : 17;
+			// A bitmap without its file header: put one in front.
+			var dib = body + skip;
+			var bits = this.u16(s, dib + 14);
+			var used = this.u32(s, dib + 32);
+			var palette = bits <= 8 ? (used || (1 << bits)) * 4 : 0;
+			var total = length - skip + 14;
+			var offset = 14 + this.u32(s, dib) + palette;
+			var header = "BM" + this.le32(total) + this.le32(0) + this.le32(offset);
+			return "data:image/bmp;base64," + btoa(header + this.bytes(s, dib, length - skip));
+		}
+		if (!type) {
+			return null;
+		}
+		return "data:" + type + ";base64," + btoa(this.bytes(s, body + skip, length - skip));
+	},
+
+	le32: function(n) {
+		return String.fromCharCode(n & 0xFF, (n >> 8) & 0xFF, (n >> 16) & 0xFF, (n >>> 24) & 0xFF);
+	},
+
+	// A picture in the line of text: its record is in the Data stream at this position.
+	inlinePicture: function(model, at) {
+		var data = model.data;
+		if (at + 0x44 > data.length) {
+			return null;
+		}
+		var total = this.u32(data, at);
+		var kind = this.u16(data, at + 6);
+		var scaleX = this.u16(data, at + 0x20) || 1000;
+		var scaleY = this.u16(data, at + 0x22) || 1000;
+		var out = {width: this.u16(data, at + 0x1C) * scaleX / 1000 / 20, height: this.u16(data, at + 0x1E) * scaleY / 1000 / 20, src: null};
+		var p = at + this.u16(data, at + 4);
+		var end = Math.min(data.length, at + total);
+		if (kind === 0x66) {
+			p += 1 + this.u8(data, p);  // a linked file's name
+		}
+		// The picture is a drawing record; go down through its containers to the stored picture.
+		while (p + 8 <= end) {
+			var head = this.u16(data, p);
+			var type = this.u16(data, p + 2);
+			if (type === 0xF007 || (type >= 0xF018 && type <= 0xF117)) {
+				out.src = this.pictureAt(data, p);
+				break;
+			}
+			p += (head & 0xF) === 0xF ? 8 : 8 + this.u32(data, p + 4);
+		}
+		return out;
+	},
+
 	// ---- building the page ----------------------------------------------------------------------
 
 	render: function(model, container) {
+		var section = model.sections[0];
 		var sheet = document.createElement("div");
 		sheet.className = "pp-sheet";
-		sheet.style.width = "612pt";
-		var wd = model.wd;
-		var count = 0;
+		sheet.style.width = section.pageWidth + "pt";
+		sheet.style.padding = section.marginTop + "pt " + section.marginRight + "pt " + section.marginBottom + "pt " +
+			section.marginLeft + "pt";
 
-		var into = sheet;       // where finished paragraphs go: the sheet, or the cell being filled
+		// Headers and footers: the stories come in sixes per section, after six for the
+		// note separators: even header, odd header, even footer, odd footer, first-page
+		// header, first-page footer. One sheet shows it all, so one of each is shown.
+		var self = this;
+		function story(index) {
+			var h = model.headers;
+			if (index + 1 >= h.length || h[index + 1] <= h[index]) {
+				return null;
+			}
+			// Each ends with a paragraph mark of its own, which is not part of it.
+			return {from: model.headStart + h[index], to: model.headStart + h[index + 1] - 1};
+		}
+		function strip(index, className) {
+			var range = story(index);
+			if (!range || range.to <= range.from) {
+				return null;
+			}
+			var el = document.createElement("div");
+			el.className = className;
+			self.flow(model, range.from, range.to, el, {});
+			return el;
+		}
+		var header = (section.titlePage && strip(10, "pp-header")) || strip(7, "pp-header");
+		var footer = (section.titlePage && strip(11, "pp-footer")) || strip(9, "pp-footer");
+		if (header) {
+			sheet.appendChild(header);
+		}
+
+		var notes = {foot: [], end: []};
+		var count = this.flow(model, 0, model.textLength, sheet, {notes: notes});
+
+		// Footnotes, then endnotes, under a short rule.
+		function noteList(list, refs, text, start, roman) {
+			if (!list.length) {
+				return;
+			}
+			var rule = document.createElement("div");
+			rule.className = "pp-notes-rule";
+			sheet.appendChild(rule);
+			for (var i = 0; i < list.length; i++) {
+				var index = list[i];
+				if (index + 1 >= text.length) {
+					continue;
+				}
+				var note = document.createElement("div");
+				note.className = "pp-note";
+				var label = roman ? PP.Docx.roman(index + 1) : String(index + 1);
+				self.flow(model, start + text[index], start + text[index + 1], note, {noteLabel: label});
+				sheet.appendChild(note);
+			}
+		}
+		noteList(notes.foot, model.footRefs, model.footText, model.footStart, false);
+		noteList(notes.end, model.endRefs, model.endText, model.endStart, true);
+
+		if (footer) {
+			sheet.appendChild(footer);
+		}
+		container.appendChild(sheet);
+		return count;
+	},
+
+	// Lay out the characters from position "from" up to "to" as paragraphs and tables in a node.
+	// options: {notes: {foot: [], end: []} to collect the notes referred to,
+	//           noteLabel: the number to show for a note's own mark}
+	// Returns how many top-level blocks were made.
+	flow: function(model, from, to, target, options) {
+		var wd = model.wd;
+		var self = this;
+		var count = 0;
+		var into = target;      // where finished paragraphs go: the target, or the cell being filled
 		var table = null;       // the table being built
-		var row = null;         // its cells so far in this row: [td]
+		var rows = [];          // its rows so far: {cells: [td], pap}
+		var row = null;         // the cells of the row being filled: [td]
 		var cell = null;
-		var runs = [];          // the paragraph being collected: {text, chp, breakBefore, pageGap}
+		var items = [];         // the paragraph being collected
 		var current = null;
-		var fieldDepth = 0;     // inside a field's instructions, which are not shown
-		var hideUntil = [];
+		var fields = [];        // open fields: {hidden, code, link}
 		var chpHint = 0;
 		var papHint = 0;
-		var self = this;
 
+		// Borders, shading, widths and merged cells are known once all rows are in.
 		function closeTable() {
-			if (table) {
-				sheet.appendChild(table);
-				count++;
+			if (!table) {
+				return;
 			}
+			var open = {};  // column -> the cell that started a downward merge
+			for (var r = 0; r < rows.length; r++) {
+				var pap = rows[r].pap;
+				var cells = rows[r].cells;
+				var tr = document.createElement("tr");
+				var borders = pap.tableBorders || [];
+				var spanning = null;
+				for (var c = 0; c < cells.length; c++) {
+					var td = cells[c];
+					var def = (pap.cells && pap.cells[c]) || {set: []};
+					if (def.merged && !def.first && spanning) {
+						// Joined to the cell on its left.
+						spanning.colSpan = (spanning.colSpan || 1) + 1;
+						continue;
+					}
+					spanning = def.first ? td : null;
+					if (def.down && !def.downStart) {
+						// Joined to the cell above.
+						if (open[c]) {
+							open[c].rowSpan = (open[c].rowSpan || 1) + 1;
+							continue;
+						}
+					}
+					open[c] = def.downStart ? td : null;
+					if (pap.edges && pap.edges[c + 1] !== undefined) {
+						td.style.width = (pap.edges[c + 1] - pap.edges[c]) / 20 + "pt";
+					}
+					if (pap.shades && pap.shades[c]) {
+						td.style.backgroundColor = pap.shades[c];
+					}
+					if (def.valign) {
+						td.style.verticalAlign = def.valign === 1 ? "middle" : "bottom";
+					}
+					// The cell's own lines where it sets them, else the table's: outer edge or inside.
+					var sides = {
+						Top: def.set[0] ? def.top : (r === 0 ? borders[0] : borders[4]),
+						Left: def.set[1] ? def.left : (c === 0 ? borders[1] : borders[5]),
+						Bottom: def.set[2] ? def.bottom : (r === rows.length - 1 ? borders[2] : borders[4]),
+						Right: def.set[3] ? def.right : (c === cells.length - 1 ? borders[3] : borders[5])
+					};
+					for (var side in sides) {
+						if (sides[side] && sides[side] !== "none") {
+							td.style["border" + side] = sides[side];
+						}
+					}
+					tr.appendChild(td);
+				}
+				table.appendChild(tr);
+				if (r === 0 && pap.tableAlign === 1) {
+					table.style.marginLeft = "auto";
+					table.style.marginRight = "auto";
+				} else if (r === 0 && pap.tableAlign === 2) {
+					table.style.marginLeft = "auto";
+				}
+			}
+			target.appendChild(table);
+			count++;
 			table = null;
+			rows = [];
 			row = null;
 			cell = null;
-			into = sheet;
+			into = target;
 		}
 
 		function endParagraph(fc, isCellMark) {
@@ -682,24 +1234,21 @@ PP.Doc = {
 				// The mark that ends a row: the cells collected so far become the row.
 				if (!table) {
 					table = document.createElement("table");
-					table.className = "pp-table pp-table-plain";
+					table.className = "pp-table";
 				}
-				var tr = document.createElement("tr");
-				for (var c = 0; row && c < row.length; c++) {
-					if (pap.edges && pap.edges[c + 1] !== undefined) {
-						row[c].style.width = (pap.edges[c + 1] - pap.edges[c]) / 20 + "pt";
-					}
-					tr.appendChild(row[c]);
-				}
-				table.appendChild(tr);
+				rows.push({cells: row || [], pap: pap});
 				row = null;
 				cell = null;
-				into = sheet;
-				runs = [];
+				into = target;
+				items = [];
 				current = null;
 				return;
 			}
 			if (pap.inTable) {
+				if (!table) {
+					table = document.createElement("table");
+					table.className = "pp-table";
+				}
 				if (!cell) {
 					cell = document.createElement("td");
 					row = row || [];
@@ -729,32 +1278,33 @@ PP.Doc = {
 				}
 			}
 			var any = false;
-			for (var i = 0; i < runs.length; i++) {
-				var r = runs[i];
-				if (r.pageGap) {
-					var gap = document.createElement("span");
-					gap.className = "pp-page-gap";
-					el.appendChild(gap);
+			for (var i = 0; i < items.length; i++) {
+				var item = items[i];
+				if (item.node) {
+					el.appendChild(item.node);
+					any = true;
 					continue;
 				}
-				if (r.lineBreak) {
-					el.appendChild(document.createElement("br"));
-					continue;
-				}
-				if (!r.text) {
+				if (!item.text) {
 					continue;
 				}
 				var chp = {};
 				for (k in baseChp) { chp[k] = baseChp[k]; }
-				if (r.chp) {
-					self.apply(model, wd, r.chp.at, r.chp.length, {}, chp);
+				if (item.chp) {
+					self.apply(model, wd, item.chp.at, item.chp.length, {}, chp);
 				}
 				if (chp.hidden) {
 					continue;
 				}
+				if (item.note) {
+					chp.vertical = "superscript";
+				}
 				var span = document.createElement("span");
 				PP.Docx.applyRun(span, chp);
-				span.appendChild(document.createTextNode(r.text));
+				if (item.link) {
+					span.className = "pp-link";
+				}
+				span.appendChild(document.createTextNode(item.text));
 				el.appendChild(span);
 				any = true;
 			}
@@ -765,29 +1315,173 @@ PP.Doc = {
 				el.appendChild(empty);
 			}
 			into.appendChild(el);
-			if (into === sheet) {
+			if (into === target) {
 				count++;
 			}
 			if (pap.inTable && isCellMark) {
 				cell = null;  // the next paragraph starts the next cell
 			}
-			runs = [];
+			items = [];
 			current = null;
 		}
 
-		function add(text, chpRun) {
-			if (!current || current.chp !== chpRun) {
-				current = {text: "", chp: chpRun};
-				runs.push(current);
+		function add(text, chpRun, link) {
+			if (!current || current.chp !== chpRun || current.link !== link) {
+				current = {text: "", chp: chpRun, link: link};
+				items.push(current);
 			}
 			current.text += text;
 		}
 
+		function addNode(node) {
+			items.push({node: node});
+			current = null;
+		}
+
+		// The formatting in force at a character, without the paragraph's style (enough to
+		// tell what a special character stands for).
+		function directChp(chpRun) {
+			var chp = {};
+			if (chpRun) {
+				self.apply(model, wd, chpRun.at, chpRun.length, {}, chp);
+			}
+			return chp;
+		}
+
+		function pictureNode(src, width, height) {
+			var node;
+			if (src) {
+				node = document.createElement("img");
+				node.className = "pp-picture";
+				node.src = src;
+			} else {
+				// A kind of picture the web engine cannot draw (a Windows metafile).
+				node = document.createElement("span");
+				node.className = "pp-missing";
+				node.appendChild(document.createTextNode("[picture]"));
+			}
+			if (width > 0 && height > 0) {
+				node.style.width = width + "pt";
+				node.style.height = height + "pt";
+			}
+			return node;
+		}
+
+		// One shape as a node of the given size (points): a picture, a line, or a box that
+		// may be filled, outlined, round, hold text, or hold the members of a group.
+		function shapeNode(shape, width, height, inHeader, depth) {
+			var node = document.createElement("span");
+			node.className = "pp-shape";
+			var s = node.style;
+			var stroke = Math.max(1, Math.round((shape.lineWidth === undefined ? 0.75 : shape.lineWidth) * 96 / 72));
+			var ink = shape.line || "#000";
+			s.width = Math.max(0, width) + "pt";
+			s.height = Math.max(0, height) + "pt";
+			if (shape.picture) {
+				var at = model.art.pictures[shape.picture - 1];
+				var src = at !== undefined && at !== 0xFFFFFFFF ? self.pictureAt(wd, at) : null;
+				var picture = pictureNode(src, width, height);
+				picture.style.display = "block";
+				node.appendChild(picture);
+				return node;
+			}
+			if (shape.kind === 20 || shape.kind === 32) {
+				// A straight line, from one corner of its box to the opposite one.
+				if (!shape.lined) {
+					return node;
+				}
+				// Level and upright lines are an edge of the box. A slanted line would need the
+				// box turned, which is left alone here: see the note on layers at the top.
+				if (height < 1.5) {
+					s.borderTop = stroke + "px solid " + ink;
+				} else if (width < 1.5) {
+					s.borderLeft = stroke + "px solid " + ink;
+				}
+				return node;
+			}
+			if (shape.members && shape.members.length && depth < 5 && self.drawGroups) {
+				// A group: its members are placed by where they sit in the group's own coordinates.
+				var space = shape.space || [0, 0, 1, 1];
+				var scaleX = width / Math.max(1, space[2] - space[0]);
+				var scaleY = height / Math.max(1, space[3] - space[1]);
+				for (var m = 0; m < shape.members.length; m++) {
+					var member = shape.members[m];
+					var box = member.box || space;
+					var child = shapeNode(member, (box[2] - box[0]) * scaleX, (box[3] - box[1]) * scaleY, inHeader, depth + 1);
+					child.style.position = "absolute";
+					child.style.left = (box[0] - space[0]) * scaleX + "pt";
+					child.style.top = (box[1] - space[1]) * scaleY + "pt";
+					node.appendChild(child);
+				}
+				return node;
+			}
+			if (shape.filled && shape.fill) {
+				s.backgroundColor = shape.fill;
+			} else if (shape.filled && shape.kind !== 202 && !shape.text) {
+				s.backgroundColor = "#fff";  // a drawn shape is white inside unless told otherwise
+			}
+			if (shape.lined) {
+				s.border = stroke + "px solid " + ink;
+			}
+			if (shape.kind === 3) {
+				s.borderRadius = "50%";
+				s.webkitBorderRadius = Math.max(width, height) + "pt";
+			} else if (shape.kind === 2) {
+				s.borderRadius = s.webkitBorderRadius = Math.min(width, height) / 6 + "pt";
+			}
+			if (shape.text) {
+				var boxes = inHeader ? model.headBoxes : model.boxes;
+				var start = inHeader ? model.headBoxStart : model.boxStart;
+				if (shape.text < boxes.length && boxes[shape.text] > boxes[shape.text - 1]) {
+					var inside = document.createElement("span");
+					inside.className = "pp-textbox";
+					// Its text ends with a paragraph mark of its own, which is not part of it.
+					self.flow(model, start + boxes[shape.text - 1], start + boxes[shape.text] - 1, inside, {});
+					node.appendChild(inside);
+					// Text decides the height: a box drawn for one size of type may need more here.
+					s.height = "auto";
+					s.minHeight = Math.max(0, height) + "pt";
+				}
+			}
+			return node;
+		}
+
+		// A drawn object anchored here, placed by how the text is to treat it.
+		function drawn(shape, anchor, inHeader) {
+			if (!shape) {
+				return;
+			}
+			var node = shapeNode(shape, anchor.width, anchor.height, inHeader, 0);
+			var s = node.style;
+			var section = model.sections[0];
+			// Across the page, measured from the left margin (where the text starts).
+			var x = anchor.left - (anchor.fromPage ? section.marginLeft : 0);
+			var column = section.pageWidth - section.marginLeft - section.marginRight;
+			if (anchor.wrap === 1 || anchor.wrap === 3) {
+				// Text stops above it and goes on below. An object the text should ignore (one
+				// laid over or under it) is shown the same way: see the note on layers at the top.
+				s.display = "block";
+				// It may reach into the left margin, as far as the edge of the page.
+				s.marginLeft = Math.max(-section.marginLeft, x) + "pt";
+				s.marginBottom = "6pt";
+			} else {
+				// Text runs beside it: it goes to whichever side it is nearer.
+				var right = x + anchor.width / 2 > column / 2;
+				s.cssFloat = right ? "right" : "left";
+				s.margin = right ? "0 0 6pt 9pt" : "0 9pt 6pt 0";
+			}
+			items.unshift({node: node});
+			current = null;
+		}
+
 		for (var p = 0; p < model.pieces.length; p++) {
 			var piece = model.pieces[p];
+			if (piece.end <= from || piece.start >= to) {
+				continue;
+			}
 			var step = piece.wide ? 2 : 1;
-			var last = Math.min(piece.end, model.textLength);
-			for (var cp = piece.start; cp < last; cp++) {
+			var last = Math.min(piece.end, to);
+			for (var cp = Math.max(piece.start, from); cp < last; cp++) {
 				var fc = piece.fc + (cp - piece.start) * step;
 				var code = piece.wide ? this.u16(wd, fc) : this.u8(wd, fc);
 				if (!piece.wide && code >= 0x80 && code <= 0x9F) {
@@ -799,56 +1493,92 @@ PP.Doc = {
 				}
 				// Fields: 19 starts one, 20 separates its instructions from what to show, 21 ends it.
 				if (code === 19) {
-					fieldDepth++;
-					hideUntil.push(true);
+					fields.push({hidden: true, code: "", link: false});
 					continue;
 				}
+				var field = fields.length ? fields[fields.length - 1] : null;
 				if (code === 20) {
-					if (hideUntil.length) {
-						hideUntil[hideUntil.length - 1] = false;
+					if (field) {
+						field.hidden = false;
+						field.link = /^\s*HYPERLINK\b/i.test(field.code);
 					}
 					continue;
 				}
 				if (code === 21) {
-					hideUntil.pop();
-					fieldDepth = Math.max(0, fieldDepth - 1);
+					fields.pop();
 					continue;
 				}
 				var hidden = false;
-				for (var h = 0; h < hideUntil.length; h++) {
-					if (hideUntil[h]) {
-						hidden = true;
-					}
+				var link = false;
+				for (var f = 0; f < fields.length; f++) {
+					hidden = hidden || fields[f].hidden;
+					link = link || fields[f].link;
 				}
 				if (hidden) {
+					if (field && code >= 32) {
+						field.code += String.fromCharCode(code);
+					}
 					continue;
 				}
 				var ci = this.runAt(model.chpRuns, fc, chpHint);
 				chpHint = ci >= 0 ? ci : chpHint;
 				var chpRun = ci >= 0 ? model.chpRuns[ci] : null;
 				if (code === 12) {
-					runs.push({pageGap: true});
-					current = null;
+					var gap = document.createElement("span");
+					gap.className = "pp-page-gap";
+					addNode(gap);
 				} else if (code === 11) {
-					runs.push({lineBreak: true});
-					current = null;
+					addNode(document.createElement("br"));
 				} else if (code === 9) {
-					add("  ", chpRun);
+					add("  ", chpRun, link);
 				} else if (code === 30) {
-					add("‑", chpRun);
+					add("‑", chpRun, link);
 				} else if (code === 31) {
-					add("­", chpRun);
+					add("­", chpRun, link);
 				} else if (code >= 32) {
-					add(String.fromCharCode(code), chpRun);
+					add(String.fromCharCode(code), chpRun, link);
+				} else if (code === 1) {
+					// A picture in the line (unless it is the data of a form field).
+					var pic = directChp(chpRun);
+					if (pic.special && pic.picture !== undefined && !pic.formData) {
+						var found = this.inlinePicture(model, pic.picture);
+						if (found) {
+							addNode(pictureNode(found.src, found.width, found.height));
+						}
+					}
+				} else if (code === 8) {
+					var anchor = model.anchors[cp];
+					if (anchor && directChp(chpRun).special) {
+						drawn(model.art.shapes[anchor.shape], anchor, cp >= model.headStart);
+					}
+				} else if (code === 2 && directChp(chpRun).special) {
+					// A note's number: in the body it refers to the note; in the note it starts it.
+					var label = options.noteLabel;
+					if (options.notes) {
+						var at = model.footRefs.indexOf(cp);
+						if (at >= 0 && at < model.footRefs.length - 1) {
+							options.notes.foot.push(at);
+							label = String(at + 1);
+						} else {
+							at = model.endRefs.indexOf(cp);
+							if (at >= 0 && at < model.endRefs.length - 1) {
+								options.notes.end.push(at);
+								label = PP.Docx.roman(at + 1);
+							}
+						}
+					}
+					if (label) {
+						items.push({text: label, chp: chpRun, note: true});
+						current = null;
+					}
 				}
-				// Other codes below 32 mark pictures, drawings and notes, which are not shown yet.
+				// Other codes below 32 are marks for comments and the like, which are not shown.
 			}
 		}
-		if (runs.length) {
+		if (items.length) {
 			endParagraph(model.pieces[model.pieces.length - 1].fc, false);
 		}
 		closeTable();
-		container.appendChild(sheet);
 		return count;
 	}
 };
