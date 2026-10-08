@@ -33,11 +33,13 @@ the job.
 - [ ] **Presentations (.pptx)**: slides drawn to scale, with a slide strip.
 - [ ] **Finish old Word files (.doc)** before starting another format:
   - [ ] Footnotes and endnotes are written but untested: find or make a file with some.
-  - [ ] Groups of shapes (diagrams). Written, switched off (`PP.Doc.drawGroups`): they
-    need absolute positions, untried since the graphics hang below.
-  - [ ] Objects that overlap text, and slanted lines. Both were taken out after the
-    TouchPad's graphics driver hung on a page with layered boxes; they need a way
-    to draw that does not stack layers (see the note at the top of `Doc.js`).
+  - [x] Groups of shapes (diagrams) and objects that overlap text.
+  - [ ] Shapes other than boxes, rounded boxes, ovals and straight lines (arrows,
+    stars, callouts...): only their text shows. LibreOffice keeps the outline of every
+    such shape as a table (`svx/source/customshapes/EnhancedCustomShapeGeometry.cxx`);
+    bring those over and draw them.
+  - [ ] Slanted lines (they need a rotation, untried on the TouchPad).
+  - [ ] Gradient fills and shadows on shapes (drawn as a flat color).
   - [ ] Windows metafile pictures (.wmf, .emf): a box marks their place. Needs a
     metafile renderer.
   - [ ] Tab stops, and text in columns.
@@ -51,6 +53,14 @@ the job.
 - [ ] **Pinch to zoom and fit to width**, and remember the place in a document.
 - [ ] **Real pages**: break a document into pages as the original does.
 - [ ] **A real icon.**
+
+## How documents are checked
+
+LibreOffice (kept outside this repo) renders each test document to PDF, and the
+pages are compared with what Papers draws on the TouchPad. `tools/open-doc.ps1`
+opens a document on the TouchPad from a cold start and reports any graphics
+trouble. Document content is always drawn in software: see the note in
+`app/source/DocView.js`.
 
 ## Smaller wins
 

@@ -19,7 +19,7 @@
  * endnotes are listed after the text.
  *
  * Drawn shapes are boxes, rounded boxes, ovals and straight lines, alone or in groups,
- * with their fill and outline; any other shape is drawn as its bounding box.
+ * with their fill and outline; of any other shape only the text is shown.
  *
  * Objects placed over or under the text, and the members of a group, are positioned
  * absolutely. The view that shows the page scrolls in software (see DocView.js), so
@@ -248,6 +248,10 @@ PP.Doc = {
 		model.chpRuns = this.readPages(wd, table, where(12), false);
 		model.papRuns = this.readPages(wd, table, where(13), true);
 		model.fonts = this.readFonts(table, where(15));
+		// What text looks like before any style speaks: the style sheet names a font, and
+		// Word's own starting size is 10 points.
+		var sheet = where(1);
+		model.baseChp = {size: 10, font: sheet.length >= 16 ? model.fonts[this.u16(table, sheet.at + 14)] : undefined};
 		model.pieces = this.readPieces(table, where(33));
 		model.lists = this.readLists(table, where(73), where(74));
 		if (!model.pieces.length) {
@@ -692,7 +696,7 @@ PP.Doc = {
 	style: function(model, istd) {
 		var style = model.styles[istd];
 		if (!style) {
-			return {pap: {}, chp: {}};
+			return {pap: {}, chp: {size: model.baseChp.size, font: model.baseChp.font}};
 		}
 		if (style.resolved) {
 			return style.resolved;
@@ -705,7 +709,7 @@ PP.Doc = {
 			chain.unshift(model.styles[at]);
 			at = model.styles[at].base;
 		}
-		var out = {pap: {}, chp: {}};
+		var out = {pap: {}, chp: {size: model.baseChp.size, font: model.baseChp.font}};
 		style.resolved = out;  // set first: a character style may be named from inside
 		for (var i = 0; i < chain.length; i++) {
 			this.apply(model, model.table, chain[i].papAt, chain[i].papLength, out.pap, out.chp);
@@ -1413,12 +1417,18 @@ PP.Doc = {
 				}
 				return node;
 			}
-			if (shape.filled && shape.fill) {
+			// Boxes, rounded boxes, ovals and text boxes are drawn. Any other shape (an arrow,
+			// a star, a callout...) has an outline this cannot draw yet, and a box in its
+			// place would be wrong and would cover what is under it, so only its text shows.
+			var known = shape.kind === 1 || shape.kind === 2 || shape.kind === 3 || shape.kind === 202;
+			if (!known) {
+				// nothing to paint
+			} else if (shape.filled && shape.fill) {
 				s.backgroundColor = shape.fill;
 			} else if (shape.filled && shape.kind !== 202 && !shape.text) {
 				s.backgroundColor = "#fff";  // a drawn shape is white inside unless told otherwise
 			}
-			if (shape.lined) {
+			if (shape.lined && known) {
 				s.border = stroke + "px solid " + ink;
 			}
 			if (shape.kind === 3) {
@@ -1552,7 +1562,8 @@ PP.Doc = {
 				} else if (code === 1) {
 					// A picture in the line (unless it is the data of a form field).
 					var pic = directChp(chpRun);
-					if (pic.special && pic.picture !== undefined && !pic.formData) {
+					// Hidden text can hold pictures too (an icon kept in the file but not shown).
+					if (pic.special && pic.picture !== undefined && !pic.formData && !pic.hidden) {
 						var found = this.inlinePicture(model, pic.picture);
 						if (found) {
 							addNode(pictureNode(found.src, found.width, found.height));
@@ -1560,7 +1571,8 @@ PP.Doc = {
 					}
 				} else if (code === 8) {
 					var anchor = model.anchors[cp];
-					if (anchor && directChp(chpRun).special) {
+					var mark = directChp(chpRun);
+					if (anchor && mark.special && !mark.hidden) {
 						drawn(model.art.shapes[anchor.shape], anchor, cp >= model.headStart);
 					}
 				} else if (code === 2 && directChp(chpRun).special) {
