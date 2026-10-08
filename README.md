@@ -44,7 +44,25 @@ cp native/ppzip service/bin/ppzip
 Build on a native Linux filesystem; the 2011 toolchain cannot read sources from
 a Windows or network drive.
 
+## Credits
+
+Papers stands on [LibreOffice](https://www.libreoffice.org/), the free office suite
+of The Document Foundation and its contributors. LibreOffice is the model for how
+each format is read here, and the source of code translated into this app.
+
+- A file translated from LibreOffice says so at its top, names the LibreOffice file
+  it came from, and stays under LibreOffice's license, the Mozilla Public License 2.0
+  (some of that code in turn came from Apache OpenOffice, under the Apache License
+  2.0, as LibreOffice's own file headers record).
+- The readers written for this app (`Doc.js`, `Docx.js`, `Wmf.js`) follow the
+  structure of LibreOffice's Word and metafile import code and were checked against
+  LibreOffice's rendering of the same files.
+
+Also used: [miniz](https://github.com/richgel999/miniz) (MIT) in the zip helper.
+
 ## License
 
-GPL-3.0. See [LICENSE](LICENSE). miniz is under the MIT license
+GPL-3.0 for the app as a whole. See [LICENSE](LICENSE). Files translated from
+LibreOffice are under the Mozilla Public License 2.0, which allows them to be
+combined with it; miniz is under the MIT license
 ([native/LICENSE.miniz](native/LICENSE.miniz)).
