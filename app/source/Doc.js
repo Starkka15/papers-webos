@@ -1276,6 +1276,9 @@ PP.Doc = {
 			for (var i = 0; i < items.length; i++) {
 				var item = items[i];
 				if (item.node) {
+					if (item.placed) {
+						item.placed.style.left = (item.across - (pap.left || 0) - (pap.first || 0)) + "pt";
+					}
 					el.appendChild(item.node);
 					any = true;
 					continue;
@@ -1457,11 +1460,13 @@ PP.Doc = {
 				var holder = document.createElement("span");
 				holder.className = "pp-anchor";
 				s.position = "absolute";
-				s.left = Math.max(-section.marginLeft, x) + "pt";
 				s.top = (anchor.fromParagraph ? anchor.top : 0) + "pt";
 				s.zIndex = anchor.behind ? "-1" : "1";
 				holder.appendChild(node);
-				items.unshift({node: holder});
+				// Its place across the page is measured from the edge of the text column. The
+				// spot it hangs from is at the start of the paragraph's first line, which the
+				// paragraph's indents move; they are known when the paragraph ends (see there).
+				items.unshift({node: holder, placed: node, across: Math.max(-section.marginLeft, x)});
 				current = null;
 				return;
 			}
