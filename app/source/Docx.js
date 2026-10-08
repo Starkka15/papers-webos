@@ -10,9 +10,12 @@
  * Lengths in the file are twips (1/20 point), font sizes half-points, and picture
  * sizes EMU (12700 per point). Everything is turned into points for CSS.
  *
- * Not handled yet: headers and footers, footnotes, floating shapes and text
- * boxes placed off the text flow, charts, tracked-change display, page breaks as
- * real pages (the document is one continuous sheet).
+ * Each page the document starts (a page break, a new section, or a place where Word
+ * noted it broke the page) is a sheet of its own. The first section's header is shown
+ * at the top of the first page and the last footer at the bottom of the last page;
+ * footnotes and endnotes are listed at the end.
+ *
+ * Not handled yet: floating shapes and text boxes, charts, tracked-change display.
  */
 PP.Docx = {
 	W: "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
@@ -27,7 +30,8 @@ PP.Docx = {
 	// dir: where the file was unpacked. callback(model) or callback(null, message).
 	open: function(dir, callback) {
 		var self = this;
-		var model = {dir: dir, rels: {}, styles: {}, defaults: {ppr: {}, rpr: {}}, nums: {}, abstracts: {}};
+		var model = {dir: dir, rels: {}, styles: {}, defaults: {ppr: {}, rpr: {}}, nums: {}, abstracts: {}, parts: {},
+			used: {foot: [], end: []}};
 		PP.readXml(dir + "/word/document.xml", function(doc) {
 			if (!doc) {
 				callback(null, "This does not look like a Word document.");
@@ -46,11 +50,58 @@ PP.Docx = {
 						if (numbering) {
 							self.readNumbering(model, numbering);
 						}
-						callback(model);
+						self.readParts(model, function() {
+							callback(model);
+						});
 					});
 				});
 			});
 		});
+	},
+
+	// The other parts the body refers to: each header and footer, and the footnotes and
+	// endnotes. Each is a file of its own with its own list of pictures and links.
+	// They end up in model.parts by name: {doc, rels}.
+	readParts: function(model, done) {
+		var self = this;
+		var wanted = [];
+		for (var id in model.rels) {
+			var target = model.rels[id].target || "";
+			if (!model.rels[id].external && /(^|\/)(header|footer)\d*\.xml$/i.test(target)) {
+				wanted.push({name: id, target: target});
+			} else if (/(^|\/)footnotes\.xml$/i.test(target)) {
+				wanted.push({name: "footnotes", target: target});
+			} else if (/(^|\/)endnotes\.xml$/i.test(target)) {
+				wanted.push({name: "endnotes", target: target});
+			}
+		}
+		function next() {
+			var item = wanted.shift();
+			if (!item) {
+				done();
+				return;
+			}
+			var path = item.target.replace(/^\/+/, "");
+			if (!/^word\//.test(path)) {
+				path = "word/" + path;
+			}
+			var slash = path.lastIndexOf("/");
+			PP.readXml(model.dir + "/" + path, function(doc) {
+				if (!doc) {
+					next();
+					return;
+				}
+				PP.readXml(model.dir + "/" + path.substring(0, slash) + "/_rels/" + path.substring(slash + 1) + ".rels", function(rels) {
+					var holder = {rels: {}};
+					if (rels) {
+						self.readRels(holder, rels);
+					}
+					model.parts[item.name] = {doc: doc, rels: holder.rels};
+					next();
+				});
+			});
+		}
+		next();
 	},
 
 	// ---- small XML helpers -----------------------------------------------------------
@@ -435,25 +486,165 @@ PP.Docx = {
 
 	// ---- the body (DomainMapper) ------------------------------------------------------------------
 
-	// Builds the page inside container (a DOM node). Returns how many blocks it made.
-	render: function(model, container) {
-		var body = this.kid(model.doc.documentElement, "body");
-		var sheet = document.createElement("div");
-		sheet.className = "pp-sheet";
-		// Page size and margins come from the last section; one sheet shows it all.
-		var sect = body ? this.kid(body, "sectPr") : null;
+	// A section's page setup, from its w:sectPr. Lengths in points.
+	section: function(sect) {
 		var size = this.kid(sect, "pgSz");
 		var margins = this.kid(sect, "pgMar");
-		var width = size ? this.number(this.att(size, "w")) / 20 : 612;
-		sheet.style.width = width + "pt";
-		if (margins) {
-			sheet.style.padding = (this.number(this.att(margins, "top")) || 1440) / 20 + "pt " +
-				(this.number(this.att(margins, "right")) || 1440) / 20 + "pt " +
-				(this.number(this.att(margins, "bottom")) || 1440) / 20 + "pt " +
-				(this.number(this.att(margins, "left")) || 1440) / 20 + "pt";
+		var type = this.kid(sect, "type");
+		var self = this;
+		function twips(el, name, fallback) {
+			var v = el ? self.number(self.att(el, name)) : undefined;
+			return (v === undefined ? fallback : Math.abs(v)) / 20;
 		}
-		var count = this.blocks(model, body, sheet);
-		container.appendChild(sheet);
+		var out = {
+			width: twips(size, "w", 12240), height: twips(size, "h", 15840),
+			top: twips(margins, "top", 1440), right: twips(margins, "right", 1440),
+			bottom: twips(margins, "bottom", 1440), left: twips(margins, "left", 1440),
+			headerTop: twips(margins, "header", 720), footerBottom: twips(margins, "footer", 720),
+			titlePage: this.toggle(sect, "titlePg") === true,
+			continuous: !!type && this.att(type, "val") === "continuous",
+			headers: {}, footers: {}
+		};
+		var refs = sect ? sect.childNodes : [];
+		for (var i = 0; i < refs.length; i++) {
+			var r = refs[i];
+			if (r.nodeType === 1 && (r.localName === "headerReference" || r.localName === "footerReference")) {
+				var id = r.getAttributeNS(this.R, "id") || r.getAttribute("r:id");
+				(r.localName === "headerReference" ? out.headers : out.footers)[this.att(r, "type") || "default"] = id;
+			}
+		}
+		return out;
+	},
+
+	// A header or footer part, or the notes, drawn into a block; null if there is nothing in it.
+	// The part has its own list of pictures and links, which stands in while it is drawn.
+	partBlock: function(model, name, className, from) {
+		var part = model.parts[name];
+		if (!part) {
+			return null;
+		}
+		var el = document.createElement("div");
+		el.className = className;
+		var rels = model.rels;
+		model.rels = part.rels;
+		var count = this.blocks(model, from || part.doc.documentElement, el);
+		model.rels = rels;
+		return count ? el : null;
+	},
+
+	// Builds the pages inside container (a DOM node). Returns how many blocks it made.
+	// Each page the document starts (a page break, a new section, or a place where Word
+	// noted it broke the page) is a sheet of its own, at least a page high.
+	render: function(model, container) {
+		var self = this;
+		var body = this.kid(model.doc.documentElement, "body");
+		// The sections, in order: each ends at a paragraph that carries its setup, and the
+		// last one's setup is at the end of the body.
+		var setups = [];
+		var marks = body ? body.getElementsByTagNameNS(this.W, "sectPr") : [];
+		for (var i = 0; i < marks.length; i++) {
+			setups.push(this.section(marks[i]));
+		}
+		if (!setups.length) {
+			setups.push(this.section(null));
+		}
+		var at = 0;
+		var section = setups[0];
+		model.section = section;
+		model.used = {foot: [], end: []};
+
+		function newSheet() {
+			var page = document.createElement("div");
+			page.className = "pp-sheet";
+			page.style.width = section.width + "pt";
+			page.style.minHeight = section.height + "pt";
+			page.style.padding = section.top + "pt " + section.right + "pt " + section.bottom + "pt " + section.left + "pt";
+			container.appendChild(page);
+			return page;
+		}
+		var sheet = newSheet();
+		var count = 0;
+
+		// The header starts in the top margin, a set distance from the top of the page; if it
+		// is taller than the margin leaves room for, the text starts below it.
+		var header = this.partBlock(model, (section.titlePage && section.headers.first) || section.headers["default"], "pp-header");
+		if (header) {
+			var room = Math.max(0, section.top - section.headerTop);
+			header.style.marginTop = -room + "pt";
+			header.style.minHeight = room + "pt";
+			header.style.marginBottom = "0";
+			sheet.appendChild(header);
+		}
+		var footerName = section.footers["default"] || section.footers.first;
+
+		function walk(parent) {
+			for (var c = parent ? parent.firstChild : null; c; c = c.nextSibling) {
+				if (c.nodeType !== 1 || c.namespaceURI !== self.W) {
+					continue;
+				}
+				if (c.localName === "p") {
+					var flags = {};
+					var el = self.paragraph(model, c, flags);
+					if (flags.pageStarts) {
+						sheet = newSheet();
+					}
+					sheet.appendChild(el);
+					count++;
+					if (flags.sectionEnds) {
+						// The next section's setup takes over; unless it is "continuous" it starts a page.
+						at = Math.min(at + 1, setups.length - 1);
+						section = setups[at];
+						model.section = section;
+						footerName = section.footers["default"] || footerName;
+						if (!section.continuous) {
+							sheet = newSheet();
+						}
+					} else if (flags.pageEnds) {
+						sheet = newSheet();
+					}
+				} else if (c.localName === "tbl") {
+					sheet.appendChild(self.table(model, c));
+					count++;
+				} else if (c.localName === "sdt") {
+					walk(self.kid(c, "sdtContent"));
+				}
+			}
+		}
+		walk(body);
+
+		// Footnotes, then endnotes, under a short rule on the last page.
+		function notes(ids, name, tag, roman) {
+			var part = model.parts[name];
+			if (!ids.length || !part) {
+				return;
+			}
+			var rule = document.createElement("div");
+			rule.className = "pp-notes-rule";
+			sheet.appendChild(rule);
+			var all = part.doc.getElementsByTagNameNS(self.W, tag);
+			for (var n = 0; n < ids.length; n++) {
+				for (var k = 0; k < all.length; k++) {
+					if (self.att(all[k], "id") === ids[n]) {
+						model.noteLabel = roman ? self.roman(n + 1) : String(n + 1);
+						var note = self.partBlock(model, name, "pp-note", all[k]);
+						model.noteLabel = null;
+						if (note) {
+							sheet.appendChild(note);
+						}
+						break;
+					}
+				}
+			}
+		}
+		var used = model.used;
+		model.used = {foot: [], end: []};  // notes inside notes are not followed
+		notes(used.foot, "footnotes", "footnote", false);
+		notes(used.end, "endnotes", "endnote", true);
+
+		var footer = this.partBlock(model, footerName, "pp-footer");
+		if (footer) {
+			sheet.appendChild(footer);
+		}
 		return count;
 	},
 
@@ -481,7 +672,9 @@ PP.Docx = {
 		return count;
 	},
 
-	paragraph: function(model, p) {
+	// flags, when given (for paragraphs directly on a page), receives pageStarts, pageEnds
+	// and sectionEnds, and page breaks are reported there and not drawn as a strip.
+	paragraph: function(model, p, flags) {
 		var direct = this.paraProps(this.kid(p, "pPr"));
 		var style = this.style(model, direct.style || model.defaultParagraph);
 		// In a table, the table style's paragraph settings come before the paragraph's own style.
@@ -513,6 +706,15 @@ PP.Docx = {
 			}
 		}
 
+		if (flags) {
+			if (props.pageBreak) {
+				flags.pageStarts = true;
+				props.pageBreak = false;
+			}
+			if (this.kid(this.kid(p, "pPr"), "sectPr")) {
+				flags.sectionEnds = true;
+			}
+		}
 		this.applyPara(el, props);
 
 		if (label !== null) {
@@ -526,7 +728,7 @@ PP.Docx = {
 			el.appendChild(tag);
 		}
 
-		var state = {inField: 0};
+		var state = {inField: 0, flags: flags || null, holder: el, labelled: label !== null};
 		this.inlines(model, p, el, base, state);
 		if (!el.lastChild || (label !== null && el.childNodes.length === 1)) {
 			// An empty paragraph still takes up a line.
@@ -631,13 +833,28 @@ PP.Docx = {
 				text("\u2003\u2003");
 			} else if (name === "br") {
 				var type = this.att(c, "type");
-				if (type === "page") {
+				if (type === "page" && state.flags) {
+					this.pageBreak(state);
+				} else if (type === "page") {
 					var gap = document.createElement("span");
 					gap.className = "pp-page-gap";
 					into.appendChild(gap);
 				} else {
 					into.appendChild(document.createElement("br"));
 				}
+				span = null;
+			} else if (name === "lastRenderedPageBreak" && state.flags) {
+				// Word's own note of where it started a new page when it last laid the text out.
+				this.pageBreak(state);
+			} else if (name === "footnoteReference" || name === "endnoteReference") {
+				// A note's number in the text; the notes themselves are listed at the end.
+				var list = name === "footnoteReference" ? model.used.foot : model.used.end;
+				list.push(this.att(c, "id"));
+				this.noteMark(into, props, name === "footnoteReference" ? String(list.length) : this.roman(list.length));
+				span = null;
+			} else if ((name === "footnoteRef" || name === "endnoteRef") && model.noteLabel) {
+				// The note's own number, at the start of its text.
+				this.noteMark(into, props, model.noteLabel);
 				span = null;
 			} else if (name === "cr") {
 				into.appendChild(document.createElement("br"));
@@ -655,6 +872,27 @@ PP.Docx = {
 				span = null;
 			}
 		}
+	},
+
+	// A page break in a paragraph that sits directly on a page: before anything of the
+	// paragraph it opens the new page with this paragraph, otherwise the page ends after it.
+	pageBreak: function(state) {
+		var holder = state.holder;
+		var empty = !holder.lastChild || (state.labelled && holder.childNodes.length === 1);
+		if (empty) {
+			state.flags.pageStarts = true;
+		} else {
+			state.flags.pageEnds = true;
+		}
+	},
+
+	noteMark: function(into, props, label) {
+		var mark = document.createElement("span");
+		var look = this.merge({}, props);
+		look.vertical = "superscript";
+		this.applyRun(mark, look);
+		mark.appendChild(document.createTextNode(label));
+		into.appendChild(mark);
 	},
 
 	// Paragraph formatting as CSS on a block. Lengths are in points.
