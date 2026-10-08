@@ -920,10 +920,32 @@ PP.Doc = {
 					shape.lined = true;
 					art.shapes[shape.id] = shape;
 				} else if (kind === 0xF00B && shape) {
-					// Properties: 6 bytes each, a number and a value.
+					// Properties: 6 bytes each, a number and a value. One marked as long has its
+					// content after the whole list, in the order they are listed, and its value
+					// is that content's length.
+					var longAt = body + (head >> 4) * 6;
 					for (var i = 0; i < (head >> 4) && body + i * 6 + 6 <= end; i++) {
 						var id = self.u16(table, body + i * 6) & 0x3FFF;
 						var value = self.u32(table, body + i * 6 + 2);
+						if (self.u16(table, body + i * 6) & 0x8000) {
+							// A counted array's length sometimes leaves out its 6 bytes of counts
+							// (the same check as LibreOffice's DffPropSet reader makes).
+							if ((id === 325 || id === 326 || id === 337 || id === 341 || id === 342 || id === 343 ||
+									id === 407 || id === 467 || id === 899) && longAt + 6 <= body + length) {
+								var each = self.u16(table, longAt + 4);
+								if (each >= 0x8000) {
+									each = (0x10000 - each) >> 2;
+								}
+								if (each * self.u16(table, longAt) === value) {
+									value += 6;
+								}
+							}
+							if (id === 325 || id === 326 || id === 342) {
+								self.ownGeometry(table, longAt, Math.min(value, body + length - longAt), id, shape);
+							}
+							longAt += value;
+							continue;
+						}
 						switch (id) {
 						case 260: shape.picture = value; break;        // which stored picture, counting from 1
 						case 128: shape.text = value >>> 16; break;    // which text box, counting from 1
@@ -939,6 +961,11 @@ PP.Doc = {
 							break;
 						case 511:
 							if (value & 0x80000) { shape.lined = (value & 0x08) !== 0; shape.lineGiven = true; }
+							break;
+						case 320: case 321: case 322: case 323:
+							// The grid a shape's own outline is drawn on.
+							shape.own = shape.own || {};
+							shape.own[["left", "top", "right", "bottom"][id - 320]] = value | 0;
 							break;
 						case 959:
 							// Whether it lies behind the text, and whether it is hidden. LibreOffice goes by
@@ -976,6 +1003,49 @@ PP.Doc = {
 			}
 		}
 		return art;
+	},
+
+	// A shape's own outline, stored with it: its points (325), how they are joined (326)
+	// or its formulas (342), each a counted array. They go into shape.own in the form
+	// PP.Shapes takes. (DffPropertyReader::ApplyCustomShapeGeometryAttributes in
+	// LibreOffice's filter/source/msfilter/msdffimp.cxx)
+	ownGeometry: function(s, at, length, id, shape) {
+		if (length < 6) {
+			return;
+		}
+		var count = this.u16(s, at);
+		var size = this.u16(s, at + 4);
+		var p = at + 6;
+		var end = at + length;
+		var out = [];
+		var i;
+		var self = this;
+		function s16(q) { var v = self.u16(s, q); return v >= 0x8000 ? v - 0x10000 : v; }
+		if (id === 325) {
+			// 0xFFF0: each number cut down to its low two bytes.
+			if (size === 0xFFF0) { size = 4; }
+			if (size !== 4 && size !== 8) { return; }
+			for (i = 0; i < count && p + size <= end; i++, p += size) {
+				if (size === 8) {
+					out.push(this.u32(s, p), this.u32(s, p + 4));
+				} else if (shape.kind === 19) {
+					out.push(this.u16(s, p), this.u16(s, p + 2));  // an arc's are never below zero
+				} else {
+					out.push(s16(p) >>> 0, s16(p + 2) >>> 0);
+				}
+			}
+		} else if (id === 326) {
+			for (i = 0; i < count && p + 2 <= end; i++, p += 2) {
+				out.push(this.u16(s, p));
+			}
+		} else {
+			if (count > 128) { return; }
+			for (i = 0; i < count && p + 8 <= end; i++, p += 8) {
+				out.push(this.u16(s, p), s16(p + 2), s16(p + 4), s16(p + 6));
+			}
+		}
+		shape.own = shape.own || {};
+		shape.own[id === 325 ? "v" : (id === 326 ? "s" : "c")] = out;
 	},
 
 	// The bytes of a stream as a string of characters 0 to 255, which btoa needs.
@@ -1477,7 +1547,7 @@ PP.Doc = {
 		// Draw a preset shape's outline into its node (sizes in points, stroke in pixels).
 		// The drawing may reach outside the shape's box (a callout's tail, a thick line).
 		function presetNode(node, shape, width, height, fill, line, stroke) {
-			var drawing = PP.Shapes.draw(shape.kind, {width: width * 96 / 72, height: height * 96 / 72, adjust: shape.adjust,
+			var drawing = PP.Shapes.draw(shape.kind, {width: width * 96 / 72, height: height * 96 / 72, adjust: shape.adjust, own: shape.own,
 				fill: fill, line: line, lineWidth: stroke, flipH: shape.flipH, flipV: shape.flipV});
 			placeCanvas(node, drawing);
 		}
@@ -1551,11 +1621,12 @@ PP.Doc = {
 			// Any other preset shape (an arrow, a star, a callout...) is drawn from LibreOffice's
 			// table of outlines. One with no outline there shows only its text.
 			var area = null;
-			if (!known && shape.kind !== 75 && PP.Shapes.has(shape.kind)) {
+			var drawable = PP.Shapes.has(shape.kind) || (shape.own && shape.own.v);
+			if (!known && shape.kind !== 75 && drawable) {
 				var isFilled = shape.filled && (shape.fillGiven || PP.Shapes.filledByDefault(shape.kind));
 				var isLined = shape.lined && (shape.lineGiven || PP.Shapes.strokedByDefault(shape.kind));
 				presetNode(node, shape, width, height, isFilled ? (shape.fill || "#ffffff") : null, isLined ? ink : null, stroke);
-				area = PP.Shapes.textArea(shape.kind, width, height, shape.adjust, shape.flipH, shape.flipV);
+				area = PP.Shapes.textArea(shape.kind, width, height, shape.adjust, shape.flipH, shape.flipV, shape.own);
 			}
 			if (!known) {
 				// nothing to paint
@@ -1591,7 +1662,7 @@ PP.Doc = {
 						inside.style.width = (area[2] - area[0]) + "pt";
 						inside.style.height = (area[3] - area[1]) + "pt";
 						inside.style.overflow = "hidden";
-					} else if (!PP.Shapes.has(shape.kind) || known) {
+					} else if (!drawable || known) {
 						s.overflow = "hidden";
 					}
 				}

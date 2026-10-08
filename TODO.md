@@ -39,9 +39,8 @@ the job.
     with its evaluator translated in `Shapes.js`.
   - [x] Slanted and dashed lines, arrowheads (one style of head so far).
   - [x] Shapes lie behind the text only when the shape says so, as LibreOffice decides it.
-  - [ ] Freeform shapes, whose outline is stored in the document (shape kind 0 with
-    its own points): `Shapes.js` can draw them once `readArt` reads the point, segment
-    and formula arrays (`DffPropertyReader::ApplyCustomShapeGeometryAttributes`).
+  - [x] Freeform shapes, whose outline is stored in the document (polygons, curves),
+    and preset shapes with parts of their outline replaced.
   - [ ] Turned shapes, and text that runs up or down a text box.
   - [ ] WordArt (text on a path): its guide lines are drawn, not its text.
   - [ ] Gradient fills and shadows on shapes (drawn as a flat color).
@@ -91,7 +90,9 @@ trouble. Document content is always drawn in software: see the note in
 ## Later
 
 - [ ] **Editing**: type and format text, change cells, save. Writing a file needs
-  a way to make zip archives, which the TouchPad lacks; likely the first plugin.
+  a way to make zip archives, which the TouchPad lacks: extend `ppzip` to write them.
+  Decided: Papers does not write binary `.doc`. An edited `.doc` is saved as `.docx`
+  or as OpenDocument (`.odt`), and the person saving picks which.
 - [ ] **New documents** from templates.
 - [ ] **Charts** in documents and spreadsheets.
 - [ ] **Formulas** recalculated in spreadsheets.

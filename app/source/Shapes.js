@@ -40,6 +40,40 @@ PP.Shapes = {
 		return PP.ShapeTable.byType[kind] !== undefined;
 	},
 
+	// The description of a shape: the table's, with whatever the document stores of its
+	// own laid over it (a freeform shape stores everything; a preset one may replace parts).
+	//   own: {v, s, c: as in ShapeTable.js, left, top, right, bottom: its grid}
+	// (what DffPropertyReader::ApplyCustomShapeGeometryAttributes and
+	// SdrObjCustomShape::MergeDefaultAttributes do between them)
+	describe: function(kind, own) {
+		var preset = PP.ShapeTable.shapes[PP.ShapeTable.byType[kind]];
+		if (!own) {
+			return preset || null;
+		}
+		if (!own.v && !preset) {
+			return null;
+		}
+		var def = {};
+		for (var k in preset || {}) {
+			def[k] = preset[k];
+		}
+		if (own.v) { def.v = own.v; def.s = own.s || []; delete def.t; }
+		else if (own.s) { def.s = own.s; }
+		if (own.c) { def.c = own.c; }
+		if (own.left !== undefined || own.top !== undefined || own.right !== undefined || own.bottom !== undefined) {
+			def.left = own.left || 0;
+			def.top = own.top || 0;
+			def.w = (own.right === undefined ? 21600 : own.right) - def.left;
+			def.h = (own.bottom === undefined ? 21600 : own.bottom) - def.top;
+		} else if (!preset) {
+			def.w = def.h = 21600;
+		}
+		// A shape with a number but no name in LibreOffice's table keeps the angles of its
+		// ellipse segments the way Office's binary files store them.
+		def.binaryAngles = !preset && kind !== 0;
+		return def;
+	},
+
 	// Shapes that have no fill, or no outline, unless the document says they do
 	// (IsCustomShapeFilledByDefault, IsCustomShapeStrokedByDefault).
 	filledByDefault: function(kind) {
@@ -56,8 +90,8 @@ PP.Shapes = {
 	// A shape ready to be measured or drawn at a size:
 	//   kind: the shape number;  width, height: its box, in pixels
 	//   adjust: the document's adjust values (missing ones take the shape's defaults)
-	setup: function(kind, width, height, adjust) {
-		var def = PP.ShapeTable.shapes[PP.ShapeTable.byType[kind]];
+	setup: function(kind, width, height, adjust, own) {
+		var def = this.describe(kind, own);
 		if (!def) {
 			return null;
 		}
@@ -125,10 +159,10 @@ PP.Shapes = {
 			return g.adjust[value - 327] || 0;  // an adjust value
 		}
 		switch (value) {
-		case 320: return 0;                              // left
-		case 321: return 0;                              // top
-		case 322: return g.coordWidth * g.xRatio;        // right
-		case 323: return g.coordHeight * g.yRatio;       // bottom
+		case 320: return g.def.left || 0;                                     // left
+		case 321: return g.def.top || 0;                                      // top
+		case 322: return ((g.def.left || 0) + g.coordWidth) * g.xRatio;       // right
+		case 323: return ((g.def.top || 0) + g.coordHeight) * g.yRatio;       // bottom
 		}
 		return 0;
 	},
@@ -230,8 +264,8 @@ PP.Shapes = {
 	// GetPoint: point number n of the shape, in pixels within its box.
 	point: function(g, n) {
 		var v = g.def.v;
-		return [this.parameter(g, v[n * 2], true, false) * g.xScale,
-			this.parameter(g, v[n * 2 + 1], false, true) * g.yScale];
+		return [(this.parameter(g, v[n * 2], true, false) - (g.def.left || 0)) * g.xScale,
+			(this.parameter(g, v[n * 2 + 1], false, true) - (g.def.top || 0)) * g.yScale];
 	},
 
 	// Points along an ellipse from one angle to another, the way angles grow (down the
@@ -372,6 +406,11 @@ PP.Shapes = {
 			var code = segments[state.segment++];
 			var command = code >> 8;
 			var count = code & 0xFF;
+			if (command < 0xA0) {
+				// Lines, curves, moves, close and end: three bits of command, the rest a count.
+				command = command & 0xE0;
+				count = code & 0x1FFF;
+			}
 			var ended = false;
 			switch (command) {
 			case 0xAA: part.noFill = true; break;
@@ -430,6 +469,26 @@ PP.Shapes = {
 					var shr = hr * g.yScale;
 					if (swr === 0 && shr === 0) {
 						current.push(center);
+						continue;
+					}
+					if (def.binaryAngles) {
+						// Angles in 16.16 fixed point, the second one how far to swing; 90 degrees is
+						// up and a swing above zero goes counter-clockwise as seen.
+						var swing = -endAngle / 65536;
+						var first = -startAngle / 65536;
+						var lastAngle = first + swing;
+						if (swing < 0) { var keep = first; first = lastAngle; lastAngle = keep; }
+						var norm = function(d) { d = d % 360; if (d < 0) { d += 360; } return d * Math.PI / 180; };
+						var piece = [];
+						var fromAngle = first, toAngle = first + 180;
+						while (toAngle < lastAngle) {
+							piece = piece.concat(this.ellipsePiece(center[0], center[1], swr, shr, norm(fromAngle), norm(toAngle)));
+							fromAngle = toAngle;
+							toAngle += 180;
+						}
+						piece = piece.concat(this.ellipsePiece(center[0], center[1], swr, shr, norm(fromAngle), norm(lastAngle)));
+						if (swing < 0) { piece.reverse(); }
+						append(piece);
 						continue;
 					}
 					if (this.WHOLE_ELLIPSES[g.kind]) {
@@ -650,8 +709,8 @@ PP.Shapes = {
 
 	// GetTextRect: where the shape's text goes, as [left, top, right, bottom] in pixels
 	// within its box, or null if the shape does not say (then it is the whole box).
-	textArea: function(kind, width, height, adjust, flipH, flipV) {
-		var g = this.setup(kind, width, height, adjust);
+	textArea: function(kind, width, height, adjust, flipH, flipV, own) {
+		var g = this.setup(kind, width, height, adjust, own);
 		if (!g || !g.def.t || g.def.t.length < 4) {
 			return null;
 		}
@@ -745,7 +804,7 @@ PP.Shapes = {
 	draw: function(kind, options) {
 		var width = Math.max(1, options.width);
 		var height = Math.max(1, options.height);
-		var g = this.setup(kind, width, height, options.adjust);
+		var g = this.setup(kind, width, height, options.adjust, options.own);
 		if (!g) {
 			return null;
 		}
