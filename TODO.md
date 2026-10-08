@@ -44,6 +44,10 @@ the job.
   - [ ] Enhanced metafile pictures (.emf): a box marks their place. LibreOffice's
     reader is `emfio/source/reader/emfreader.cxx`.
   - [ ] Tab stops, and text in columns.
+  - [ ] Documents taller than about 32,000 pixels (some 35 pages). The TouchPad's
+    graphics count positions in 16 bits, and the old office app's notes say drawing
+    goes wrong past 32,768. Untested here: the longest test file is 25,000 pixels.
+    The answer is likely to keep only the pages near the screen in the page.
   - [ ] Each section's own page size, header and footer (the first section's are used).
   - [ ] Word 95 and older, and Rich Text saved with a .doc name.
 - [ ] **Finish Word documents (.docx)** to the same level: headers and footers,

@@ -621,6 +621,8 @@ PP.Doc = {
 			case 0x9023: pap.marginTop = Math.abs(this.s16(s, v)) / 20; break;
 			case 0x9024: pap.marginBottom = Math.abs(this.s16(s, v)) / 20; break;
 			case 0x300A: pap.titlePage = this.u8(s, v) !== 0; break;
+			case 0xB017: pap.headerTop = this.u16(s, v) / 20; break;
+			case 0xB018: pap.footerBottom = this.u16(s, v) / 20; break;
 			}
 			at = v + size;
 		}
@@ -634,7 +636,7 @@ PP.Doc = {
 		for (var i = 0; i < count; i++) {
 			// What Word assumes when a section says nothing: US Letter, 1.25" and 1" margins.
 			var section = {end: this.u32(model.table, plc.at + (i + 1) * 4), pageWidth: 612, pageHeight: 792,
-				marginLeft: 90, marginRight: 90, marginTop: 72, marginBottom: 72};
+				marginLeft: 90, marginRight: 90, marginTop: 72, marginBottom: 72, headerTop: 36, footerBottom: 36};
 			var at = this.u32(model.table, plc.at + (count + 1) * 4 + i * 12 + 2);
 			if (at !== 0xFFFFFFFF && at + 2 <= model.wd.length) {
 				this.apply(model, model.wd, at + 2, this.u16(model.wd, at), section, {});
@@ -643,7 +645,7 @@ PP.Doc = {
 		}
 		if (!out.length) {
 			out.push({end: model.textLength, pageWidth: 612, pageHeight: 792, marginLeft: 90, marginRight: 90,
-				marginTop: 72, marginBottom: 72});
+				marginTop: 72, marginBottom: 72, headerTop: 36, footerBottom: 36});
 		}
 		return out;
 	},
@@ -766,7 +768,10 @@ PP.Doc = {
 			for (var n = 0; n < levels && p + 28 <= table.length; n++) {
 				var chpSize = this.u8(table, p + 24);
 				var papSize = this.u8(table, p + 25);
-				var level = {start: this.u32(table, p), format: this.u8(table, p + 4), at: p + 28, length: papSize, text: []};
+				// Each level carries paragraph settings (its indents) and character settings (how
+				// its number or bullet looks), in that order, then the text of the label.
+				var level = {start: this.u32(table, p), format: this.u8(table, p + 4), at: p + 28, length: papSize,
+					chpAt: p + 28 + papSize, chpLength: chpSize, text: []};
 				p += 28 + papSize + chpSize;
 				var chars = this.u16(table, p);
 				p += 2;
@@ -843,7 +848,8 @@ PP.Doc = {
 				wrap: (flags >> 5) & 0xF,
 				behind: (flags & 0x4000) !== 0,
 				fromPage: ((flags >> 1) & 3) === 1,       // measured from the page edge, not the margin
-				fromParagraph: ((flags >> 3) & 3) === 2   // measured down from its paragraph
+				fromParagraph: ((flags >> 3) & 3) === 2,  // measured down from its paragraph
+				fromPageTop: ((flags >> 3) & 3) === 1     // measured down from the top of the page
 			};
 		}
 	},
@@ -1100,12 +1106,20 @@ PP.Doc = {
 			}
 			var el = document.createElement("div");
 			el.className = className;
-			self.flow(model, range.from, range.to, el, {});
+			var made = {};
+			self.flow(model, range.from, range.to, el, made);
+			el.pull = made.headerPull || 0;
 			return el;
 		}
 		var header = (section.titlePage && strip(10, "pp-header")) || strip(7, "pp-header");
 		var footer = (section.titlePage && strip(11, "pp-footer")) || strip(9, "pp-footer");
 		if (header) {
+			// The header starts in the top margin, a set distance from the top of the page. If it
+			// is taller than the margin leaves room for, the text starts below it, as in Word.
+			var room = Math.max(0, section.marginTop - section.headerTop);
+			header.style.marginTop = (header.pull - room) + "pt";
+			header.style.minHeight = room + "pt";
+			header.style.marginBottom = "0";
 			sheet.appendChild(header);
 		}
 
@@ -1298,7 +1312,14 @@ PP.Doc = {
 					tag.className = "pp-label";
 					var labelChp = {};
 					for (k in baseChp) { labelChp[k] = baseChp[k]; }
-					labelChp.font = undefined;
+					var labelLevel = list.levels[depth] || list.levels[0];
+					if (labelLevel && labelLevel.chpLength) {
+						self.apply(model, model.table, labelLevel.chpAt, labelLevel.chpLength, {}, labelChp);
+					}
+					// A bullet's font is a symbol font the TouchPad lacks; the bullet was already translated.
+					if (labelLevel && labelLevel.format === 23) {
+						labelChp.font = undefined;
+					}
 					PP.Docx.applyRun(tag, labelChp);
 					tag.style.minWidth = Math.max(0, -(pap.first || 0)) + "pt";
 					tag.style.textIndent = "0";
@@ -1501,7 +1522,22 @@ PP.Doc = {
 			// Across the page, measured from the left margin (where the text starts).
 			var x = anchor.left - (anchor.fromPage ? section.marginLeft : 0);
 			var column = section.pageWidth - section.marginLeft - section.marginRight;
-			if (anchor.wrap === 3) {
+			// Text keeps clear of an object unless the object says text may ignore it.
+			var ignored = anchor.wrap === 3;
+			if (inHeader && anchor.fromPageTop && !ignored) {
+				// A header object measured from the top of the page (a banner across the page):
+				// it goes where it says, and what follows starts below it.
+				s.display = "block";
+				s.marginLeft = Math.max(-section.marginLeft, x) + "pt";
+				// How far above the header's own start it sits; the header is moved up by that
+				// much as a whole (see render), since a margin on the object would be swallowed
+				// by the margins around it.
+				options.headerPull = Math.min(options.headerPull || 0, anchor.top - section.headerTop);
+				items.unshift({node: node});
+				current = null;
+				return;
+			}
+			if (ignored) {
 				// Text ignores it: it lies over or under the text and takes up no room. It hangs
 				// from a spot of no size at the start of its paragraph.
 				var holder = document.createElement("span");
