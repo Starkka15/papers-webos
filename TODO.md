@@ -44,10 +44,14 @@ the job.
   - [ ] Enhanced metafile pictures (.emf): a box marks their place. LibreOffice's
     reader is `emfio/source/reader/emfreader.cxx`.
   - [ ] Tab stops, and text in columns.
-  - [ ] Documents taller than about 32,000 pixels (some 35 pages). The TouchPad's
-    graphics count positions in 16 bits, and the old office app's notes say drawing
-    goes wrong past 32,768. Untested here: the longest test file is 25,000 pixels.
-    The answer is likely to keep only the pages near the screen in the page.
+  - [x] Long documents. The TouchPad's web engine keeps positions in 16 bits, so
+    nothing more than 32,767 pixels down a page can be reached. When a document is
+    taller than that, only the pages around the one being read are kept in the page
+    (`DocView.js`). Checked with a 35-sheet, 37,000-pixel file.
+  - [x] Pages: each page the document starts (page break, new section) is a sheet
+    of its own, a full page high.
+  - [ ] Dividing text into pages where the document does not (a long section is
+    one tall sheet), and a sheet taller than 32,767 pixels on its own.
   - [ ] Each section's own page size, header and footer (the first section's are used).
   - [ ] Word 95 and older, and Rich Text saved with a .doc name.
 - [ ] **Finish Word documents (.docx)** to the same level: headers and footers,
@@ -56,7 +60,6 @@ the job.
 - [ ] **Take over from the old office app**: register for the document file
   types, so a tapped attachment or download opens here.
 - [ ] **Pinch to zoom and fit to width**, and remember the place in a document.
-- [ ] **Real pages**: break a document into pages as the original does.
 - [ ] **A real icon.**
 
 ## How documents are checked

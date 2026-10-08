@@ -14,9 +14,10 @@
  *                   and which picture or text box each drawn shape shows
  *
  * Formatting ends up in the same shape Docx.js uses, so both draw with the same code.
- * The page is one continuous sheet: the first section gives its size and margins, its
- * header is shown once at the top and its footer once at the bottom, and footnotes and
- * endnotes are listed after the text.
+ * Each page the document itself starts (a page break or a new section) is a sheet of
+ * its own; text is not divided into pages beyond that. The first section gives the
+ * page size and margins; its header is shown at the top of the first page and its
+ * footer at the bottom of the last, and footnotes and endnotes are listed at the end.
  *
  * Drawn shapes are boxes, rounded boxes, ovals and straight lines, alone or in groups,
  * with their fill and outline; of any other shape only the text is shown.
@@ -713,7 +714,9 @@ PP.Doc = {
 			chain.unshift(model.styles[at]);
 			at = model.styles[at].base;
 		}
-		var out = {pap: {}, chp: {size: model.baseChp.size, font: model.baseChp.font}};
+		// A paragraph style starts from the document's base font and size. A character
+		// style holds only what it changes, so that applying it leaves the rest alone.
+		var out = {pap: {}, chp: style.kind === 2 ? {} : {size: model.baseChp.size, font: model.baseChp.font}};
 		style.resolved = out;  // set first: a character style may be named from inside
 		for (var i = 0; i < chain.length; i++) {
 			this.apply(model, model.table, chain[i].papAt, chain[i].papLength, out.pap, out.chp);
@@ -1081,11 +1084,21 @@ PP.Doc = {
 
 	render: function(model, container) {
 		var section = model.sections[0];
-		var sheet = document.createElement("div");
-		sheet.className = "pp-sheet";
-		sheet.style.width = section.pageWidth + "pt";
-		sheet.style.padding = section.marginTop + "pt " + section.marginRight + "pt " + section.marginBottom + "pt " +
-			section.marginLeft + "pt";
+		// Each page the document starts (with a page break or a new section) gets a sheet of
+		// its own, at least a page high. Text that runs past a page's length is not divided:
+		// the sheet just grows.
+		function newSheet() {
+			var page = document.createElement("div");
+			page.className = "pp-sheet";
+			page.style.width = section.pageWidth + "pt";
+			page.style.minHeight = section.pageHeight + "pt";
+			page.style.padding = section.marginTop + "pt " + section.marginRight + "pt " + section.marginBottom + "pt " +
+				section.marginLeft + "pt";
+			container.appendChild(page);
+			return page;
+		}
+		var sheet = newSheet();
+		var last = sheet;
 
 		// Headers and footers: the stories come in sixes per section, after six for the
 		// note separators: even header, odd header, even footer, odd footer, first-page
@@ -1124,7 +1137,12 @@ PP.Doc = {
 		}
 
 		var notes = {foot: [], end: []};
-		var count = this.flow(model, 0, model.textLength, sheet, {notes: notes});
+		var count = this.flow(model, 0, model.textLength, sheet, {notes: notes, nextPage: function() {
+			last = newSheet();
+			return last;
+		}});
+		// Notes and the footer go at the end of the last page.
+		sheet = last;
 
 		// Footnotes, then endnotes, under a short rule.
 		function noteList(list, refs, text, start, roman) {
@@ -1152,12 +1170,12 @@ PP.Doc = {
 		if (footer) {
 			sheet.appendChild(footer);
 		}
-		container.appendChild(sheet);
 		return count;
 	},
 
 	// Lay out the characters from position "from" up to "to" as paragraphs and tables in a node.
-	// options: {notes: {foot: [], end: []} to collect the notes referred to,
+	// options: {nextPage: a function giving the node for the next page, called at a page break,
+	//           notes: {foot: [], end: []} to collect the notes referred to,
 	//           noteLabel: the number to show for a note's own mark}
 	// Returns how many top-level blocks were made.
 	flow: function(model, from, to, target, options) {
@@ -1174,6 +1192,8 @@ PP.Doc = {
 		var fields = [];        // open fields: {hidden, code, link}
 		var chpHint = 0;
 		var papHint = 0;
+		var pageEnds = false;   // a page break was met inside or at the end of the paragraph being collected
+		var pageStarts = false; // a page break was met at its very start
 
 		// Borders, shading, widths and merged cells are known once all rows are in.
 		function closeTable() {
@@ -1367,6 +1387,12 @@ PP.Doc = {
 				empty.appendChild(document.createTextNode(" "));
 				el.appendChild(empty);
 			}
+			if (pageStarts && into === target && !table) {
+				// The break came before any of this paragraph: it opens the new page.
+				target = options.nextPage();
+				into = target;
+			}
+			pageStarts = false;
 			into.appendChild(el);
 			if (into === target) {
 				count++;
@@ -1376,6 +1402,12 @@ PP.Doc = {
 			}
 			items = [];
 			current = null;
+			if (pageEnds && into === target && !table) {
+				// What follows goes on the next page.
+				target = options.nextPage();
+				into = target;
+			}
+			pageEnds = false;
 		}
 
 		function add(text, chpRun, link) {
@@ -1586,6 +1618,9 @@ PP.Doc = {
 					endParagraph(fc, code === 7);
 					continue;
 				}
+				if (PP.glyphs[code]) {
+					code = PP.glyphs[code];
+				}
 				// Fields: 19 starts one, 20 separates its instructions from what to show, 21 ends it.
 				if (code === 19) {
 					fields.push({hidden: true, code: "", link: false});
@@ -1619,6 +1654,16 @@ PP.Doc = {
 				chpHint = ci >= 0 ? ci : chpHint;
 				var chpRun = ci >= 0 ? model.chpRuns[ci] : null;
 				if (code === 12) {
+					// A page break or the end of a section. Where pages are being made, the next
+					// paragraph starts a new one; elsewhere (a text box, a note) a strip marks it.
+					if (options.nextPage) {
+						if (items.length) {
+							pageEnds = true;
+						} else {
+							pageStarts = true;
+						}
+						continue;
+					}
 					var gap = document.createElement("span");
 					gap.className = "pp-page-gap";
 					addNode(gap);
@@ -1627,7 +1672,7 @@ PP.Doc = {
 				} else if (code === 9) {
 					add("  ", chpRun, link);
 				} else if (code === 30) {
-					add("‑", chpRun, link);
+					add("-", chpRun, link);
 				} else if (code === 31) {
 					add("­", chpRun, link);
 				} else if (code >= 32) {

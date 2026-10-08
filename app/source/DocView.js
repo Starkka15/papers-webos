@@ -17,7 +17,8 @@ enyo.kind({
 		// office app turned this off for its document and sheet scrollers for the same
 		// reason. Moved by its "top" instead, the page is drawn in software and only the
 		// part on screen costs anything.
-		{name: "scroller", kind: "Scroller", flex: 1, className: "pp-desk", accelerated: false, components: [
+		{name: "scroller", kind: "Scroller", flex: 1, className: "pp-desk", accelerated: false,
+			onScrollStop: "scrollStopped", components: [
 			{name: "note", className: "pp-doc-note", showing: false},
 			{name: "other", kind: "Button", caption: "Open in Another App", className: "pp-other", showing: false,
 				onclick: "openElsewhere"},
@@ -66,7 +67,102 @@ enyo.kind({
 		}
 	},
 
+	// ---- long documents ------------------------------------------------------------
+	//
+	// The TouchPad's web engine keeps positions in 16 bits: content more than 32,767
+	// pixels down the page is not reachable (the scroller will not go there). A long
+	// document passes that at about 30 pages. So when a document is that tall, only a
+	// run of its pages around the one being read is kept in the page, positions inside
+	// the page stay small, and the run is moved along when scrolling comes to rest near
+	// one of its ends. "where" below is a distance down the whole document.
+
+	SAFE_HEIGHT: 30000,   // taller than this and pages are kept in a window
+	WINDOW_HEIGHT: 16000, // about how much of the document the window holds
+	EDGE: 2500,           // coming to rest this close to an end of the window moves it
+	PAGE_GAP: 14,         // the space between sheets (see .pp-sheet + .pp-sheet in app.css)
+
+	// Note each page's height, and start windowing if the whole is too tall.
+	measurePages: function(node) {
+		this.pages = null;
+		var pages = [];
+		var total = 0;
+		for (var c = node.firstChild; c; c = c.nextSibling) {
+			if (c.nodeType === 1) {
+				var height = c.offsetHeight + this.PAGE_GAP;
+				pages.push({el: c, top: total, height: height});
+				total += height;
+			}
+		}
+		if (total <= this.SAFE_HEIGHT || pages.length < 3) {
+			return;
+		}
+		this.pages = pages;
+		this.totalHeight = total;
+		this.windowAround(0);
+	},
+
+	// Keep the pages around a place in the document in the page, and scroll to that place.
+	windowAround: function(where) {
+		var pages = this.pages;
+		var node = this.$.page.hasNode();
+		if (!pages || !node) {
+			return;
+		}
+		where = Math.max(0, Math.min(where, this.totalHeight));
+		// The page that place is on, then pages before and after it up to the window's size.
+		var at = 0;
+		while (at < pages.length - 1 && pages[at].top + pages[at].height <= where) {
+			at++;
+		}
+		var first = at;
+		var last = at;
+		var held = pages[at].height;
+		while (held < this.WINDOW_HEIGHT && (first > 0 || last < pages.length - 1)) {
+			if (first > 0) {
+				first--;
+				held += pages[first].height;
+			}
+			if (last < pages.length - 1 && held < this.WINDOW_HEIGHT) {
+				last++;
+				held += pages[last].height;
+			}
+		}
+		while (node.firstChild) {
+			node.removeChild(node.firstChild);
+		}
+		for (var i = first; i <= last; i++) {
+			node.appendChild(pages[i].el);
+		}
+		this.windowFirst = first;
+		this.windowLast = last;
+		this.windowTop = pages[first].top;
+		this.windowHeight = held;
+		this.$.scroller.setScrollTop(Math.max(0, where - this.windowTop));
+	},
+
+	// Scroll to a distance down the whole document.
+	scrollDocumentTo: function(where) {
+		if (this.pages) {
+			this.windowAround(where);
+		} else {
+			this.$.scroller.setScrollTop(where);
+		}
+	},
+
+	scrollStopped: function() {
+		if (!this.pages) {
+			return;
+		}
+		var local = this.$.scroller.getScrollTop();
+		var nearStart = local < this.EDGE && this.windowFirst > 0;
+		var nearEnd = local > this.windowHeight - this.EDGE - 700 && this.windowLast < this.pages.length - 1;
+		if (nearStart || nearEnd) {
+			this.windowAround(this.windowTop + local);
+		}
+	},
+
 	clearPage: function() {
+		this.pages = null;
 		var node = this.$.page.hasNode();
 		if (node) {
 			node.innerHTML = "";
@@ -117,9 +213,18 @@ enyo.kind({
 			return;
 		}
 		this.showNote("");
+		this.measurePages(node);
 		// {scroll: pixels} from a test launch: start that far down the document.
 		if (this.file.scroll) {
-			this.$.scroller.setScrollTop(this.file.scroll);
+			// After the view has settled: showing it makes the scroller check its limits again.
+			var self = this;
+			var where = this.file.scroll;
+			var opening = this.opens;
+			setTimeout(function() {
+				if (opening === self.opens) {
+					self.scrollDocumentTo(where);
+				}
+			}, 1500);
 		}
 		PP.log("opened " + this.file.name + ": " + blocks + " blocks in " +
 			(new Date().getTime() - this.started) + " ms");

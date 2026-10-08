@@ -134,3 +134,21 @@ PP.readBinary = function(path, callback) {
 		finish(null);
 	}
 };
+
+// Characters the TouchPad's fonts have no shape for (they draw as empty boxes), and
+// the nearest character they do have. Add to this as more turn up.
+PP.glyphs = {
+	0x02B9: 0x27,    // modifier prime -> apostrophe
+	0x02BA: 0x22,    // modifier double prime -> quotation mark
+	0x2010: 0x2D,    // hyphen -> hyphen-minus
+	0x2011: 0x2D     // non-breaking hyphen -> hyphen-minus
+};
+
+PP.plainGlyphs = function(text) {
+	if (!/[\u02B9\u02BA\u2010\u2011]/.test(text)) {
+		return text;
+	}
+	return text.replace(/[\u02B9\u02BA\u2010\u2011]/g, function(ch) {
+		return String.fromCharCode(PP.glyphs[ch.charCodeAt(0)]);
+	});
+};

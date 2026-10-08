@@ -626,7 +626,7 @@ PP.Docx = {
 				continue;
 			}
 			if (name === "t") {
-				text(c.textContent || "");
+				text(PP.plainGlyphs(c.textContent || ""));
 			} else if (name === "tab") {
 				text("\u2003\u2003");
 			} else if (name === "br") {
@@ -643,7 +643,7 @@ PP.Docx = {
 				into.appendChild(document.createElement("br"));
 				span = null;
 			} else if (name === "noBreakHyphen") {
-				text("\u2011");
+				text("-");
 			} else if (name === "softHyphen") {
 				text("\u00AD");
 			} else if (name === "sym") {

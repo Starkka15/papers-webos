@@ -273,3 +273,8 @@
 	vertical-align: top;
 	text-indent: 0;
 }
+
+/* Pages of one document, one under another on the desk. */
+.pp-sheet + .pp-sheet {
+	margin-top: 14px;
+}
