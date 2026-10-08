@@ -930,13 +930,28 @@ PP.Doc = {
 						case 385: shape.fill = self.artColor(value); break;
 						case 448: shape.line = self.artColor(value); break;
 						case 459: shape.lineWidth = value / 12700; break;
+						case 462: shape.dash = value; break;            // dashes, dots...
+						case 464: shape.startArrow = value !== 0; break;
+						case 465: shape.endArrow = value !== 0; break;
 						case 447:
 							// Each on/off setting has a second bit saying whether it is given at all.
-							if (value & 0x100000) { shape.filled = (value & 0x10) !== 0; }
+							if (value & 0x100000) { shape.filled = (value & 0x10) !== 0; shape.fillGiven = true; }
 							break;
 						case 511:
-							if (value & 0x80000) { shape.lined = (value & 0x08) !== 0; }
+							if (value & 0x80000) { shape.lined = (value & 0x08) !== 0; shape.lineGiven = true; }
 							break;
+						case 959:
+							// Whether it lies behind the text, and whether it is hidden. LibreOffice goes by
+							// these (SwMSDffManager::ProcessObj), not by the flag kept with the anchor.
+							shape.behind = (value & 0x20) !== 0;
+							shape.hidden = (value & 0x02) !== 0;
+							break;
+						default:
+							// The settings of a preset shape's handles (how far an arrow's head reaches...).
+							if (id >= 327 && id <= 336) {
+								shape.adjust = shape.adjust || [];
+								shape.adjust[id - 327] = value | 0;
+							}
 						}
 					}
 				} else if (kind === 0xF00F && shape && length >= 16) {
@@ -1459,6 +1474,25 @@ PP.Doc = {
 			return node;
 		}
 
+		// Draw a preset shape's outline into its node (sizes in points, stroke in pixels).
+		// The drawing may reach outside the shape's box (a callout's tail, a thick line).
+		function presetNode(node, shape, width, height, fill, line, stroke) {
+			var drawing = PP.Shapes.draw(shape.kind, {width: width * 96 / 72, height: height * 96 / 72, adjust: shape.adjust,
+				fill: fill, line: line, lineWidth: stroke, flipH: shape.flipH, flipV: shape.flipV});
+			placeCanvas(node, drawing);
+		}
+		function placeCanvas(node, drawing) {
+			if (!drawing) {
+				return;
+			}
+			var c = drawing.canvas;
+			c.style.position = "absolute";
+			c.style.left = c.style.top = -drawing.margin + "px";
+			c.style.width = c.width + "px";
+			c.style.height = c.height + "px";
+			node.appendChild(c);
+		}
+
 		// One shape as a node of the given size (points): a picture, a line, or a box that
 		// may be filled, outlined, round, hold text, or hold the members of a group.
 		function shapeNode(shape, width, height, inHeader, depth) {
@@ -1482,12 +1516,15 @@ PP.Doc = {
 				if (!shape.lined) {
 					return node;
 				}
-				// Level and upright lines are an edge of the box. A slanted line would need the
-				// box turned, which has not been tried on the TouchPad.
-				if (height < 1.5) {
+				// Level and upright lines are an edge of the box; a slanted one is drawn.
+				var plain = !shape.dash && !shape.startArrow && !shape.endArrow;
+				if (plain && height < 1.5) {
 					s.borderTop = stroke + "px solid " + ink;
-				} else if (width < 1.5) {
+				} else if (plain && width < 1.5) {
 					s.borderLeft = stroke + "px solid " + ink;
+				} else {
+					placeCanvas(node, PP.Shapes.line({width: width * 96 / 72, height: height * 96 / 72, line: ink, lineWidth: stroke,
+						flipH: shape.flipH, flipV: shape.flipV, dash: shape.dash, startArrow: shape.startArrow, endArrow: shape.endArrow}));
 				}
 				return node;
 			}
@@ -1511,6 +1548,15 @@ PP.Doc = {
 			// a star, a callout...) has an outline this cannot draw yet, and a box in its
 			// place would be wrong and would cover what is under it, so only its text shows.
 			var known = shape.kind === 1 || shape.kind === 2 || shape.kind === 3 || shape.kind === 202;
+			// Any other preset shape (an arrow, a star, a callout...) is drawn from LibreOffice's
+			// table of outlines. One with no outline there shows only its text.
+			var area = null;
+			if (!known && shape.kind !== 75 && PP.Shapes.has(shape.kind)) {
+				var isFilled = shape.filled && (shape.fillGiven || PP.Shapes.filledByDefault(shape.kind));
+				var isLined = shape.lined && (shape.lineGiven || PP.Shapes.strokedByDefault(shape.kind));
+				presetNode(node, shape, width, height, isFilled ? (shape.fill || "#ffffff") : null, isLined ? ink : null, stroke);
+				area = PP.Shapes.textArea(shape.kind, width, height, shape.adjust, shape.flipH, shape.flipV);
+			}
 			if (!known) {
 				// nothing to paint
 			} else if (shape.filled && shape.fill) {
@@ -1537,7 +1583,17 @@ PP.Doc = {
 					self.flow(model, start + boxes[shape.text - 1], start + boxes[shape.text] - 1, inside, {});
 					node.appendChild(inside);
 					// The box keeps the size it was drawn at, as in Word: text that does not fit is cut off.
-					s.overflow = "hidden";
+					if (area) {
+						// A drawn shape says where in it the text goes (inside a star's body, not its points).
+						inside.style.position = "absolute";
+						inside.style.left = area[0] + "pt";
+						inside.style.top = area[1] + "pt";
+						inside.style.width = (area[2] - area[0]) + "pt";
+						inside.style.height = (area[3] - area[1]) + "pt";
+						inside.style.overflow = "hidden";
+					} else if (!PP.Shapes.has(shape.kind) || known) {
+						s.overflow = "hidden";
+					}
 				}
 			}
 			return node;
@@ -1545,7 +1601,7 @@ PP.Doc = {
 
 		// A drawn object anchored here, placed by how the text is to treat it.
 		function drawn(shape, anchor, inHeader) {
-			if (!shape) {
+			if (!shape || shape.hidden) {
 				return;
 			}
 			var node = shapeNode(shape, anchor.width, anchor.height, inHeader, 0);
@@ -1576,7 +1632,9 @@ PP.Doc = {
 				holder.className = "pp-anchor";
 				s.position = "absolute";
 				s.top = (anchor.fromParagraph ? anchor.top : 0) + "pt";
-				s.zIndex = anchor.behind ? "-1" : "1";
+				// Behind the text only if the shape itself says so, or it is in a header or footer
+				// (as LibreOffice's SwWW8ImplReader::Read_GrafLayer decides it).
+				s.zIndex = shape.behind || inHeader ? "-1" : "1";
 				holder.appendChild(node);
 				// Its place across the page is measured from the edge of the text column. The
 				// spot it hangs from is at the start of the paragraph's first line, which the

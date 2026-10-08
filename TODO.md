@@ -34,11 +34,16 @@ the job.
 - [ ] **Finish old Word files (.doc)** before starting another format:
   - [ ] Footnotes and endnotes are written but untested: find or make a file with some.
   - [x] Groups of shapes (diagrams) and objects that overlap text.
-  - [ ] Shapes other than boxes, rounded boxes, ovals and straight lines (arrows,
-    stars, callouts...): only their text shows. LibreOffice keeps the outline of every
-    such shape as a table (`svx/source/customshapes/EnhancedCustomShapeGeometry.cxx`);
-    bring those over and draw them.
-  - [ ] Slanted lines (they need a rotation, untried on the TouchPad).
+  - [x] Preset shapes (arrows, stars, callouts, flowchart symbols...): all 199 are
+    drawn from LibreOffice's table (`ShapeTable.js`, made by `tools/gen-shapes.js`)
+    with its evaluator translated in `Shapes.js`.
+  - [x] Slanted and dashed lines, arrowheads (one style of head so far).
+  - [x] Shapes lie behind the text only when the shape says so, as LibreOffice decides it.
+  - [ ] Freeform shapes, whose outline is stored in the document (shape kind 0 with
+    its own points): `Shapes.js` can draw them once `readArt` reads the point, segment
+    and formula arrays (`DffPropertyReader::ApplyCustomShapeGeometryAttributes`).
+  - [ ] Turned shapes, and text that runs up or down a text box.
+  - [ ] WordArt (text on a path): its guide lines are drawn, not its text.
   - [ ] Gradient fills and shadows on shapes (drawn as a flat color).
   - [x] Windows metafile pictures (.wmf), drawn on a canvas by `Wmf.js`.
   - [ ] Enhanced metafile pictures (.emf): a box marks their place. LibreOffice's

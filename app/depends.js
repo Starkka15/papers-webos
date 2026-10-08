@@ -3,6 +3,8 @@ enyo.depends(
 	"source/Util.js",
 	"source/Inflate.js",
 	"source/Wmf.js",
+	"source/ShapeTable.js",
+	"source/Shapes.js",
 	"source/Docx.js",
 	"source/Doc.js",
 	"source/Browser.js",

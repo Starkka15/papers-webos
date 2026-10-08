@@ -54,6 +54,10 @@ each format is read here, and the source of code translated into this app.
   it came from, and stays under LibreOffice's license, the Mozilla Public License 2.0
   (some of that code in turn came from Apache OpenOffice, under the Apache License
   2.0, as LibreOffice's own file headers record).
+- Translated so far: the preset shapes of the drawing layer. `app/source/ShapeTable.js`
+  is generated from LibreOffice's `svx/source/customshapes/EnhancedCustomShapeGeometry.cxx`
+  by `tools/gen-shapes.js`, and `app/source/Shapes.js` is a translation of the shape
+  evaluator in `svx/source/customshapes/EnhancedCustomShape2d.cxx`.
 - The readers written for this app (`Doc.js`, `Docx.js`, `Wmf.js`) follow the
   structure of LibreOffice's Word and metafile import code and were checked against
   LibreOffice's rendering of the same files.
