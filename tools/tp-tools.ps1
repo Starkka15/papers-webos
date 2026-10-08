@@ -6,13 +6,13 @@ $script:Nov = "C:\Program Files\Palm, Inc\novacom.exe"
 function Invoke-Tp([string]$Script) {
     $f = Join-Path $env:TEMP "tp-cmd.sh"
     [IO.File]::WriteAllText($f, ($Script -replace "`r`n", "`n") + "`n", (New-Object Text.UTF8Encoding $false))
-    cmd /c "`"$script:Nov`" put file:///tmp/tp-cmd.sh < `"$f`"" | Out-Null
-    & $script:Nov run file:///bin/sh /tmp/tp-cmd.sh 2>&1
+    cmd /c "`"$script:Nov`" -d usb put file:///tmp/tp-cmd.sh < `"$f`"" | Out-Null
+    & $script:Nov -d usb run file:///bin/sh /tmp/tp-cmd.sh 2>&1
 }
 
 # Copy a file from the TouchPad to this PC.
 function Get-TpFile([string]$Remote, [string]$Local) {
-    cmd /c "`"$script:Nov`" get file://$Remote > `"$Local`""
+    cmd /c "`"$script:Nov`" -d usb get file://$Remote > `"$Local`""
 }
 
 # Take a screenshot of the TouchPad. The image comes out in the panel's own orientation.
@@ -28,7 +28,7 @@ function Show-PpScreen([string]$ParamsJson, [string]$Shot, [int]$Seconds = 5, [s
     if ($Restart) {
         $env:JAVA_HOME = "G:\Java\jdk17"
         $env:Path = "G:\Java\jdk17\bin;G:\webOS\PalmSDK\Current\bin;" + $env:Path
-        cmd /c "palm-launch.bat -c com.stark.papers 2>&1" | Out-Null
+        cmd /c "palm-launch.bat -d usb -c com.stark.papers 2>&1" | Out-Null
     }
     $launch = '{"id":"com.stark.papers","params":' + $ParamsJson + '}'
     $lines = @(

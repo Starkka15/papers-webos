@@ -26,13 +26,13 @@ if ($Install) {
     New-Item -ItemType Directory -Force $build | Out-Null
     Push-Location $build
     cmd /c "palm-package.bat H:\papers-webos\app H:\papers-webos\service H:\papers-webos\package 2>&1" | Select-Object -Last 1
-    cmd /c "palm-launch.bat -c com.stark.papers 2>&1" | Out-Null
+    cmd /c "palm-launch.bat -d usb -c com.stark.papers 2>&1" | Out-Null
     Start-Sleep 3
-    cmd /c "palm-install.bat com.stark.papers_0.1.0_all.ipk 2>&1" | Select-Object -Last 1
+    cmd /c "palm-install.bat -d usb com.stark.papers_0.1.0_all.ipk 2>&1" | Select-Object -Last 1
     Pop-Location
     Start-Sleep 4
 } else {
-    cmd /c "palm-launch.bat -c com.stark.papers 2>&1" | Out-Null
+    cmd /c "palm-launch.bat -d usb -c com.stark.papers 2>&1" | Out-Null
     Start-Sleep 5
 }
 

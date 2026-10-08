@@ -5,6 +5,8 @@ enyo.depends(
 	"source/Wmf.js",
 	"source/ShapeTable.js",
 	"source/Shapes.js",
+	"source/PresetTable.js",
+	"source/Drawing.js",
 	"source/Docx.js",
 	"source/Doc.js",
 	"source/Browser.js",

@@ -15,7 +15,7 @@
  * at the top of the first page and the last footer at the bottom of the last page;
  * footnotes and endnotes are listed at the end.
  *
- * Not handled yet: floating shapes and text boxes, charts, tracked-change display.
+ * Not handled yet: old-style (VML) shapes, turned shapes, charts, tracked-change display.
  */
 PP.Docx = {
 	W: "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
@@ -73,11 +73,14 @@ PP.Docx = {
 				wanted.push({name: "footnotes", target: target});
 			} else if (/(^|\/)endnotes\.xml$/i.test(target)) {
 				wanted.push({name: "endnotes", target: target});
+			} else if (/(^|\/)theme\d*\.xml$/i.test(target)) {
+				wanted.push({name: "theme", target: target});
 			}
 		}
 		function next() {
 			var item = wanted.shift();
 			if (!item) {
+				self.readTheme(model);
 				done();
 				return;
 			}
@@ -728,7 +731,8 @@ PP.Docx = {
 			el.appendChild(tag);
 		}
 
-		var state = {inField: 0, flags: flags || null, holder: el, labelled: label !== null};
+		var state = {inField: 0, flags: flags || null, holder: el, labelled: label !== null,
+			indent: (props.left || 0) + (props.first || 0)};
 		this.inlines(model, p, el, base, state);
 		if (!el.lastChild || (label !== null && el.childNodes.length === 1)) {
 			// An empty paragraph still takes up a line.
@@ -800,11 +804,15 @@ PP.Docx = {
 			}
 			var name = c.localName;
 			if (c.namespaceURI === this.MC && name === "AlternateContent") {
-				// Two versions of the same drawing: take the newer one's picture if it has one.
-				var pictures = c.getElementsByTagNameNS(this.A, "blip");
-				if (pictures.length) {
+				// Two versions of the same drawing: the newer one (DrawingML) if it is there,
+				// else the old one's picture.
+				var newer = c.getElementsByTagNameNS(this.W, "drawing");
+				if (newer.length) {
+					this.drawing(model, newer[0], into, state);
+				} else if (c.getElementsByTagNameNS(this.V, "imagedata").length) {
 					this.picture(model, c, into);
 				}
+				span = null;
 				continue;
 			}
 			if (c.namespaceURI !== this.W) {
@@ -867,7 +875,10 @@ PP.Docx = {
 				var code = parseInt(this.att(c, "char") || "", 16);
 				// Symbol-font characters live in a private range the TouchPad cannot draw.
 				text(isNaN(code) || code >= 0xF000 ? "\u2022" : String.fromCharCode(code));
-			} else if (name === "drawing" || name === "pict" || name === "object") {
+			} else if (name === "drawing") {
+				this.drawing(model, c, into, state);
+				span = null;
+			} else if (name === "pict" || name === "object") {
 				this.picture(model, c, into);
 				span = null;
 			}
@@ -994,6 +1005,411 @@ PP.Docx = {
 			img.style.height = height + "pt";
 		}
 		into.appendChild(img);
+	},
+
+	// ---- drawings (oox/source/drawingml, writerfilter's GraphicImport) ----------------------------
+
+	// The first child element with this name, whatever its namespace (drawings mix several).
+	child: function(node, name) {
+		for (var c = node ? node.firstChild : null; c; c = c.nextSibling) {
+			if (c.nodeType === 1 && c.localName === name) {
+				return c;
+			}
+		}
+		return null;
+	},
+	children: function(node) {
+		var out = [];
+		for (var c = node ? node.firstChild : null; c; c = c.nextSibling) {
+			if (c.nodeType === 1) {
+				out.push(c);
+			}
+		}
+		return out;
+	},
+
+	// The document's theme: its twelve named colors.
+	readTheme: function(model) {
+		model.theme = {};
+		var part = model.parts.theme;
+		if (!part) {
+			return;
+		}
+		delete model.parts.theme;
+		var scheme = part.doc.getElementsByTagNameNS(this.A, "clrScheme")[0];
+		var list = this.children(scheme);
+		for (var i = 0; i < list.length; i++) {
+			var c = this.children(list[i])[0];
+			var value = c && (c.getAttribute("val") || c.getAttribute("lastClr"));
+			if (this.color(value)) {
+				model.theme[list[i].localName] = this.color(value);
+			}
+		}
+	},
+
+	// The color an element holds (a:srgbClr, a:schemeClr, a:sysClr, a:prstClr inside it),
+	// with its lighter/darker changes applied; undefined if it holds none.
+	drawingColor: function(model, holder) {
+		var list = this.children(holder);
+		for (var i = 0; i < list.length; i++) {
+			var c = list[i];
+			var base;
+			if (c.localName === "srgbClr") {
+				base = this.color(c.getAttribute("val"));
+			} else if (c.localName === "sysClr") {
+				base = this.color(c.getAttribute("lastClr")) || (c.getAttribute("val") === "window" ? "#ffffff" : "#000000");
+			} else if (c.localName === "schemeClr") {
+				var name = c.getAttribute("val");
+				name = {tx1: "dk1", tx2: "dk2", bg1: "lt1", bg2: "lt2"}[name] || name;
+				base = (model.theme || {})[name] ||
+					{dk1: "#000000", lt1: "#ffffff", dk2: "#44546a", lt2: "#e7e6e6", accent1: "#4472c4", accent2: "#ed7d31",
+					accent3: "#a5a5a5", accent4: "#ffc000", accent5: "#5b9bd5", accent6: "#70ad47"}[name];
+			} else if (c.localName === "prstClr") {
+				base = {black: "#000000", white: "#ffffff", red: "#ff0000", green: "#008000", blue: "#0000ff",
+					yellow: "#ffff00", gray: "#808080", lightGray: "#d3d3d3", darkGray: "#a9a9a9"}[c.getAttribute("val")];
+			} else {
+				continue;
+			}
+			if (!base) {
+				return undefined;
+			}
+			var rgb = [parseInt(base.substring(1, 3), 16), parseInt(base.substring(3, 5), 16), parseInt(base.substring(5, 7), 16)];
+			var mods = this.children(c);
+			for (var m = 0; m < mods.length; m++) {
+				var by = (parseFloat(mods[m].getAttribute("val")) || 0) / 100000;
+				for (var k = 0; k < 3; k++) {
+					switch (mods[m].localName) {
+					case "shade": case "lumMod": rgb[k] = rgb[k] * by; break;
+					case "tint": rgb[k] = rgb[k] * by + 255 * (1 - by); break;
+					case "lumOff": rgb[k] = rgb[k] + 255 * by; break;
+					}
+				}
+			}
+			var out = "#";
+			for (var j = 0; j < 3; j++) {
+				var hex = Math.max(0, Math.min(255, Math.round(rgb[j]))).toString(16);
+				out += hex.length < 2 ? "0" + hex : hex;
+			}
+			return out;
+		}
+		return undefined;
+	},
+
+	// A w:drawing: something in the line of text (wp:inline) or placed on the page (wp:anchor).
+	drawing: function(model, node, into, state) {
+		var place = this.child(node, "inline") || this.child(node, "anchor");
+		if (!place) {
+			return;
+		}
+		var extent = this.child(place, "extent");
+		var width = extent ? (parseFloat(extent.getAttribute("cx")) || 0) / 12700 : 0;
+		var height = extent ? (parseFloat(extent.getAttribute("cy")) || 0) / 12700 : 0;
+		var data = this.child(this.child(place, "graphic"), "graphicData");
+		var content = this.children(data)[0];
+		var made = content ? this.drawingNode(model, content, width, height, 0) : null;
+		if (!made) {
+			return;
+		}
+		var s = made.style;
+		if (place.localName === "inline" || !state || !state.holder) {
+			into.appendChild(made);
+			return;
+		}
+		var section = model.section || this.section(null);
+		var column = section.width - section.left - section.right;
+		var self = this;
+		// How far across or down, from what.
+		function position(name) {
+			var pos = self.child(place, name);
+			var from = pos ? pos.getAttribute("relativeFrom") : "";
+			var offset = self.child(pos, "posOffset");
+			var align = self.child(pos, "align");
+			return {from: from, offset: offset ? (parseFloat(offset.textContent) || 0) / 12700 : 0,
+				align: align ? align.textContent : ""};
+		}
+		var h = position("positionH");
+		var v = position("positionV");
+		var fromPage = h.from === "page" || h.from === "leftMargin";
+		var room = fromPage ? section.width : column;
+		var x = h.align === "center" ? (room - width) / 2 : (h.align === "right" ? room - width : h.offset);
+		if (fromPage) {
+			x -= section.left;
+		}
+		var wrap = "";
+		var kinds = this.children(place);
+		for (var i = 0; i < kinds.length; i++) {
+			if (/^wrap/.test(kinds[i].localName)) {
+				wrap = kinds[i].localName;
+			}
+		}
+		if (wrap === "wrapNone" || wrap === "") {
+			// Text ignores it: it lies over or under the text and takes up no room. It hangs
+			// from a spot of no size at the start of its paragraph (as in Doc.js).
+			var holder = document.createElement("span");
+			holder.className = "pp-anchor";
+			s.position = "absolute";
+			s.left = (Math.max(-section.left, x) - (state.indent || 0)) + "pt";
+			s.top = (v.from === "paragraph" || v.from === "line" ? v.offset : 0) + "pt";
+			s.zIndex = place.getAttribute("behindDoc") === "1" ? "-1" : "1";
+			holder.appendChild(made);
+			state.holder.insertBefore(holder, state.holder.firstChild);
+		} else if (wrap === "wrapTopAndBottom") {
+			s.display = "block";
+			s.marginLeft = Math.max(-section.left, x) + "pt";
+			s.marginBottom = "6pt";
+			into.appendChild(made);
+		} else {
+			// Text runs beside it: it goes to whichever side it is nearer.
+			var right = x + width / 2 > column / 2;
+			s.cssFloat = right ? "right" : "left";
+			s.margin = right ? "0 0 6pt 9pt" : "0 9pt 6pt 0";
+			state.holder.insertBefore(made, state.holder.firstChild);
+		}
+	},
+
+	// One drawn thing as a node of a size in points: a picture (pic:pic), a shape or text
+	// box (wps:wsp), or a group of them (wpg:wgp, wpg:grpSp).
+	drawingNode: function(model, el, width, height, depth) {
+		var name = el.localName;
+		var node;
+		if (name === "pic") {
+			var blip = el.getElementsByTagNameNS(this.A, "blip")[0];
+			var id = blip && (blip.getAttributeNS(this.R, "embed") || blip.getAttribute("r:embed"));
+			node = this.imageNode(model, id, width, height);
+			if (node) {
+				node.style.display = "inline-block";
+				node.style.verticalAlign = "top";
+			}
+			return node;
+		}
+		if (name !== "wsp" && name !== "wgp" && name !== "grpSp") {
+			return null;
+		}
+		node = document.createElement("span");
+		node.className = "pp-shape";
+		node.style.width = Math.max(0, width) + "pt";
+		node.style.height = Math.max(0, height) + "pt";
+		if (name === "wsp") {
+			this.shape(model, el, node, width, height);
+			return node;
+		}
+		if (depth > 5) {
+			return node;
+		}
+		// A group: its members sit in its own coordinates.
+		var xfrm = this.child(this.child(el, "grpSpPr"), "xfrm");
+		var chOff = this.child(xfrm, "chOff");
+		var chExt = this.child(xfrm, "chExt");
+		function n(e, a) { return e ? parseFloat(e.getAttribute(a)) || 0 : 0; }
+		var scaleX = chExt && n(chExt, "cx") ? width / n(chExt, "cx") : 1 / 12700;
+		var scaleY = chExt && n(chExt, "cy") ? height / n(chExt, "cy") : 1 / 12700;
+		var members = this.children(el);
+		for (var i = 0; i < members.length; i++) {
+			var member = members[i];
+			if (member.localName !== "wsp" && member.localName !== "pic" && member.localName !== "grpSp") {
+				continue;
+			}
+			var own = this.child(this.child(member, member.localName === "grpSp" ? "grpSpPr" : "spPr"), "xfrm");
+			var off = this.child(own, "off");
+			var ext = this.child(own, "ext");
+			var kid = this.drawingNode(model, member, n(ext, "cx") * scaleX, n(ext, "cy") * scaleY, depth + 1);
+			if (kid) {
+				kid.style.position = "absolute";
+				kid.style.left = (n(off, "x") - n(chOff, "x")) * scaleX + "pt";
+				kid.style.top = (n(off, "y") - n(chOff, "y")) * scaleY + "pt";
+				node.appendChild(kid);
+			}
+		}
+		return node;
+	},
+
+	// A document's own outline for a shape (a:custGeom), in the form of PresetTable.js.
+	customGeometry: function(geom) {
+		var self = this;
+		function guides(list) {
+			var out = [];
+			var gd = self.children(list);
+			for (var i = 0; i < gd.length; i++) {
+				if (gd[i].localName === "gd") {
+					out.push(gd[i].getAttribute("name"), gd[i].getAttribute("fmla"));
+				}
+			}
+			return out;
+		}
+		function value(v) {
+			return /^-?\d+$/.test(v) ? parseInt(v, 10) : v;
+		}
+		var def = {av: guides(this.child(geom, "avLst")), gd: guides(this.child(geom, "gdLst")), paths: []};
+		var rect = this.child(geom, "rect");
+		if (rect) {
+			def.rect = [value(rect.getAttribute("l")), value(rect.getAttribute("t")), value(rect.getAttribute("r")), value(rect.getAttribute("b"))];
+		}
+		var paths = this.children(this.child(geom, "pathLst"));
+		var letters = {moveTo: "M", lnTo: "L", cubicBezTo: "C", quadBezTo: "Q"};
+		for (var i = 0; i < paths.length; i++) {
+			var path = paths[i];
+			var one = {c: []};
+			if (path.getAttribute("w")) { one.w = parseFloat(path.getAttribute("w")); }
+			if (path.getAttribute("h")) { one.h = parseFloat(path.getAttribute("h")); }
+			var fill = path.getAttribute("fill");
+			if (fill && fill !== "norm") { one.fill = fill; }
+			var stroke = path.getAttribute("stroke");
+			if (stroke === "false" || stroke === "0") { one.stroke = false; }
+			var commands = this.children(path);
+			for (var k = 0; k < commands.length; k++) {
+				var c = commands[k];
+				if (c.localName === "close") {
+					one.c.push("Z");
+				} else if (c.localName === "arcTo") {
+					one.c.push("A", value(c.getAttribute("wR")), value(c.getAttribute("hR")),
+						value(c.getAttribute("stAng")), value(c.getAttribute("swAng")));
+				} else if (letters[c.localName]) {
+					one.c.push(letters[c.localName]);
+					var pts = this.children(c);
+					for (var q = 0; q < pts.length; q++) {
+						one.c.push(value(pts[q].getAttribute("x")), value(pts[q].getAttribute("y")));
+					}
+				}
+			}
+			def.paths.push(one);
+		}
+		return def;
+	},
+
+	// A shape (wps:wsp) drawn into its node: its outline, fill and line, and its text.
+	shape: function(model, el, node, width, height) {
+		var spPr = this.child(el, "spPr");
+		var style = this.child(el, "style");
+		var xfrm = this.child(spPr, "xfrm");
+		var flipH = !!xfrm && xfrm.getAttribute("flipH") === "1";
+		var flipV = !!xfrm && xfrm.getAttribute("flipV") === "1";
+		var s = node.style;
+		// What it looks like: a preset by name, or its own outline.
+		var prst = this.child(spPr, "prstGeom");
+		var cust = this.child(spPr, "custGeom");
+		var kind = prst ? prst.getAttribute("prst") : "";
+		var def = cust ? this.customGeometry(cust) : PP.Drawing.preset(kind || "rect");
+		var adjust = {};
+		var given = this.children(this.child(prst, "avLst"));
+		for (var i = 0; i < given.length; i++) {
+			adjust[given[i].getAttribute("name")] = given[i].getAttribute("fmla");
+		}
+		// Its fill: said outright, or by the shape's style.
+		var fill;
+		if (this.child(spPr, "noFill")) {
+			fill = null;
+		} else if (this.child(spPr, "solidFill")) {
+			fill = this.drawingColor(model, this.child(spPr, "solidFill")) || null;
+		} else if (this.child(spPr, "gradFill")) {
+			// A blend of colors is drawn as its first color.
+			var stop = this.child(spPr, "gradFill").getElementsByTagNameNS(this.A, "gs")[0];
+			fill = (stop && this.drawingColor(model, stop)) || null;
+		} else {
+			var fillRef = this.child(style, "fillRef");
+			fill = fillRef && fillRef.getAttribute("idx") !== "0" ? this.drawingColor(model, fillRef) || null : null;
+		}
+		// Its line.
+		var ln = this.child(spPr, "ln");
+		var lnRef = this.child(style, "lnRef");
+		var line = null;
+		if (ln && this.child(ln, "noFill")) {
+			line = null;
+		} else if (ln && this.child(ln, "solidFill")) {
+			line = this.drawingColor(model, this.child(ln, "solidFill")) || "#000000";
+		} else if (lnRef && lnRef.getAttribute("idx") !== "0") {
+			line = this.drawingColor(model, lnRef) || "#000000";
+		} else if (ln && !style) {
+			line = "#000000";
+		}
+		var emu = ln ? parseFloat(ln.getAttribute("w")) : NaN;
+		var stroke = Math.max(1, Math.round((isNaN(emu) ? 9525 : emu) / 9525));
+		var dash = this.child(ln, "prstDash");
+		var dashKind = dash ? {dash: 6, sysDash: 1, dot: 5, sysDot: 2, lgDash: 7, dashDot: 8, sysDashDot: 3,
+			lgDashDot: 9, lgDashDotDot: 10, sysDashDotDot: 4}[dash.getAttribute("val")] : 0;
+		function arrow(e) { return !!e && !!e.getAttribute("type") && e.getAttribute("type") !== "none"; }
+		var startArrow = arrow(this.child(ln, "headEnd"));
+		var endArrow = arrow(this.child(ln, "tailEnd"));
+		var px = 96 / 72;
+		var drawing = null;
+		var boxed = !cust && (kind === "rect" || kind === "") ;
+		var straight = !cust && (kind === "line" || kind === "straightConnector1");
+		if (straight) {
+			if (line) {
+				drawing = PP.Shapes.line({width: width * px, height: height * px, line: line, lineWidth: stroke,
+					flipH: flipH, flipV: flipV, dash: dashKind, startArrow: startArrow, endArrow: endArrow});
+			}
+		} else if (boxed && !dashKind) {
+			// A plain box is cheaper as a box than as a drawing.
+			if (fill) { s.backgroundColor = fill; }
+			if (line) { s.border = stroke + "px solid " + line; }
+		} else if (def) {
+			drawing = PP.Drawing.draw(def, {width: width * px, height: height * px, adjust: adjust,
+				fill: fill, line: line, lineWidth: stroke, flipH: flipH, flipV: flipV});
+		}
+		if (drawing) {
+			var c = drawing.canvas;
+			c.style.position = "absolute";
+			c.style.left = c.style.top = -drawing.margin + "px";
+			c.style.width = c.width + "px";
+			c.style.height = c.height + "px";
+			node.appendChild(c);
+		}
+		// Its text, inside the part of the shape meant for text.
+		var content = this.child(this.child(el, "txbx"), "txbxContent");
+		if (content) {
+			var inside = document.createElement("span");
+			inside.className = "pp-textbox";
+			var body = this.child(el, "bodyPr");
+			var sides = [["tIns", 45720], ["rIns", 91440], ["bIns", 45720], ["lIns", 91440]];
+			var padding = [];
+			for (var k = 0; k < sides.length; k++) {
+				var inset = body ? parseFloat(body.getAttribute(sides[k][0])) : NaN;
+				padding.push((isNaN(inset) ? sides[k][1] : inset) / 12700 + "pt");
+			}
+			inside.style.padding = padding.join(" ");
+			this.blocks(model, content, inside);
+			var area = !boxed && def ? PP.Drawing.textArea(def, width * px, height * px, adjust) : null;
+			inside.style.position = "absolute";
+			inside.style.overflow = "hidden";
+			inside.style.webkitBoxSizing = inside.style.boxSizing = "border-box";
+			if (area) {
+				inside.style.left = area[0] / px + "pt";
+				inside.style.top = area[1] / px + "pt";
+				inside.style.width = (area[2] - area[0]) / px + "pt";
+				inside.style.height = (area[3] - area[1]) / px + "pt";
+			} else {
+				inside.style.left = inside.style.top = "0";
+				inside.style.width = width + "pt";
+				inside.style.height = height + "pt";
+			}
+			node.appendChild(inside);
+		}
+	},
+
+	// A stored picture by its relationship id, as a node of a size in points; null if there is none.
+	imageNode: function(model, id, width, height) {
+		var rel = id && model.rels[id];
+		if (!rel || rel.external) {
+			return null;
+		}
+		var target = rel.target.replace(/^\/+/, "");
+		var path = /^word\//.test(target) || rel.target.charAt(0) === "/" ? target : "word/" + target;
+		var node;
+		if (/\.(emf|wmf)$/i.test(path)) {
+			// Windows metafiles cannot be drawn by the web engine.
+			node = document.createElement("span");
+			node.className = "pp-missing";
+			node.appendChild(document.createTextNode("[picture]"));
+		} else {
+			node = document.createElement("img");
+			node.className = "pp-picture";
+			node.src = PP.fileUrl(model.dir + "/" + path);
+		}
+		if (width && height) {
+			node.style.width = width + "pt";
+			node.style.height = height + "pt";
+		}
+		return node;
 	},
 
 	// ---- tables (DomainMapperTableManager) --------------------------------------------------------

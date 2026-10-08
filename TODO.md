@@ -58,9 +58,20 @@ the job.
     one tall sheet), and a sheet taller than 32,767 pixels on its own.
   - [ ] Each section's own page size, header and footer (the first section's are used).
   - [ ] Word 95 and older, and Rich Text saved with a .doc name.
-- [ ] **Finish Word documents (.docx)** to the same level: headers and footers,
-  footnotes, text boxes and floating pictures, drawn shapes, tab stops, table
-  shading from table styles, tracked changes.
+- [ ] **Finish Word documents (.docx)** to the same level:
+  - [x] Headers and footers, footnotes and endnotes, pages.
+  - [x] Floating and inline drawings: pictures, shapes, groups and text boxes, placed
+    over, under or beside the text. All 187 preset shapes are drawn from LibreOffice's
+    definitions (`PresetTable.js`, made by `tools/gen-presets.js`), and a document's
+    own outlines (custom geometry) by the same evaluator (`Drawing.js`).
+  - [x] Theme colors in drawings.
+  - [ ] Theme colors and fonts in text.
+  - [ ] Old-style (VML) shapes, found in files from Word 2007 and in fallbacks: only
+    their pictures show.
+  - [ ] Turned shapes; text that runs up or down; gradient fills (first color only).
+  - [ ] Metafile pictures (.wmf, .emf) stored in the file: a box marks their place.
+    `Wmf.js` can draw the first kind once the picture's bytes are read.
+  - [ ] Tab stops, table shading from table styles, tracked changes.
 - [ ] **Take over from the old office app**: register for the document file
   types, so a tapped attachment or download opens here.
 - [ ] **Pinch to zoom and fit to width**, and remember the place in a document.
